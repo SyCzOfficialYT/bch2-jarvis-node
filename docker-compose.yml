@@ -1,0 +1,123 @@
+version: "3.9"
+
+services:
+  bch2-node:
+    build:
+      context: ./node
+      dockerfile: Dockerfile
+    container_name: bch2-jarvis-node
+    restart: unless-stopped
+    volumes:
+      - bch2-data:/data/.bitcoincashII
+      - ./configs/bitcoincashII.conf:/data/.bitcoincashII/bitcoincashII.conf:ro
+      - holding-data:/holding
+    ports:
+      - "8339:8339"
+      - "8342:8342"
+    environment:
+      - BITCOIN_DATA=/data/.bitcoincashII
+    networks:
+      - jarvis-net
+    healthcheck:
+      test: ["CMD", "bitcoincashII-cli", "-datadir=/data/.bitcoincashII", "getblockchaininfo"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    command: >
+      bitcoincashIId
+      -datadir=/data/.bitcoincashII
+      -conf=/data/.bitcoincashII/bitcoincashII.conf
+      -printtoconsole
+
+  wallet-init:
+    build:
+      context: ./node
+      dockerfile: Dockerfile
+    container_name: bch2-jarvis-wallet-init
+    depends_on:
+      bch2-node:
+        condition: service_healthy
+    volumes:
+      - bch2-data:/data/.bitcoincashII
+      - holding-data:/holding
+      - ./configs/bitcoincashII.conf:/data/.bitcoincashII/bitcoincashII.conf:ro
+    entrypoint: ["/bin/bash", "/init-wallet.sh"]
+    networks:
+      - jarvis-net
+    restart: "no"
+
+  dashboard-backend:
+    build:
+      context: ./dashboard/backend
+      dockerfile: Dockerfile
+    container_name: bch2-jarvis-backend
+    restart: unless-stopped
+    depends_on:
+      bch2-node:
+        condition: service_healthy
+    environment:
+      - RPC_HOST=bch2-node
+      - RPC_PORT=8342
+      - RPC_USER=jarvis
+      - RPC_PASSWORD=xz8A1Grk9NAKk4l2QerGwCmcwtVoGh62
+      - STRATUM_PROXY_URL=http://stratum-proxy:8080
+    volumes:
+      - holding-data:/holding:ro
+      - share-data:/shares:ro
+    ports:
+      - "3001:3001"
+    networks:
+      - jarvis-net
+
+  dashboard-frontend:
+    build:
+      context: ./dashboard/frontend
+      dockerfile: Dockerfile
+    container_name: bch2-jarvis-frontend
+    restart: unless-stopped
+    depends_on:
+      - dashboard-backend
+    ports:
+      - "3080:80"
+    networks:
+      - jarvis-net
+
+  stratum-proxy:
+    build:
+      context: ./stratum-proxy
+      dockerfile: Dockerfile
+    container_name: bch2-jarvis-stratum
+    restart: unless-stopped
+    depends_on:
+      bch2-node:
+        condition: service_healthy
+      wallet-init:
+        condition: service_completed_successfully
+    environment:
+      - RPC_HOST=bch2-node
+      - RPC_PORT=8342
+      - RPC_USER=jarvis
+      - RPC_PASSWORD=xz8A1Grk9NAKk4l2QerGwCmcwtVoGh62
+      - STRATUM_PORT=3333
+      - STATS_PORT=8080
+    volumes:
+      - holding-data:/holding:ro
+      - share-data:/shares
+    ports:
+      - "3333:3333"
+      - "8080:8080"
+    networks:
+      - jarvis-net
+
+volumes:
+  bch2-data:
+    driver: local
+  holding-data:
+    driver: local
+  share-data:
+    driver: local
+
+networks:
+  jarvis-net:
+    driver: bridge
