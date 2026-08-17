@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BCH2 JARVIS // NODE COMMAND</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div id="bg-canvas"></div>
+  <div class="scanlines"></div>
+  <header class="top-bar">
+    <div class="logo"><span class="logo-icon">&#9672;</span> BCH2 <span class="accent">JARVIS</span></div>
+    <div class="status-cluster">
+      <div class="status-pill"><span class="pulse"></span><span id="status-text">INIT</span></div>
+      <div class="clock" id="clock">--:--:--</div>
+    </div>
+  </header>
+  <main class="dashboard">
+    <section class="hero-grid">
+      <div class="card"><div class="card-label">HEIGHT</div><div class="card-value" id="blocks">—</div></div>
+      <div class="card"><div class="card-label">DIFFICULTY</div><div class="card-value" id="difficulty">—</div></div>
+      <div class="card"><div class="card-label">NET HASH</div><div class="card-value" id="net-hash">—</div></div>
+      <div class="card"><div class="card-label">YOUR HASH</div><div class="card-value" id="my-hash">—</div></div>
+    </section>
+    <section class="card">
+      <div class="card-header">HOLDING BALANCE</div>
+      <div id="bal-total" class="card-value">0</div>
+      <div class="holding-addr" id="holding-addr">generating…</div>
+    </section>
+    <section class="card">
+      <div class="card-header">BLOCK ROUND</div>
+      <div class="round-timer" id="round-timer">00:00</div>
+      <div class="progress-bar"><div class="progress-fill" id="round-bar"></div></div>
+      <div>Best share: <span id="best-share">—</span> | Shares: <span id="shares-acc">0</span></div>
+    </section>
+    <section class="card">
+      <div class="card-header">BLOCK PARTS</div>
+      <div class="block-parts" id="block-parts">WAITING…</div>
+    </section>
+    <section class="card">
+      <div class="card-header">LOG</div>
+      <div id="log-feed" class="log-feed"></div>
+    </section>
+  </main>
+  <footer class="footer">BCH2 JARVIS | <span id="last-update">—</span></footer>
+  <script src="app.js"></script>
+</body>
+</html>
