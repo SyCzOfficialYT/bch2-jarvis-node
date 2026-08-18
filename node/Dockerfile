@@ -1,4 +1,4 @@
-# Bitcoin Cash II Core – binary-based, works without buildx
+# Bitcoin Cash II Core – binary + runtime libs (works without buildx)
 FROM debian:bookworm-slim
 
 ARG VERSION=27.0.2
@@ -6,12 +6,25 @@ ARG VERSION=27.0.2
 ENV DEBIAN_FRONTEND=noninteractive
 ENV BITCOIN_DATA=/data/.bitcoincashII
 
+# Runtime libs required by bitcoincashIId binary
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     wget \
     gosu \
     bash \
+    libminiupnpc17 \
+    libevent-2.1-7 \
+    libevent-pthreads-2.1-7 \
+    libboost-system1.74.0 \
+    libboost-filesystem1.74.0 \
+    libboost-thread1.74.0 \
+    libboost-chrono1.74.0 \
+    libdb5.3++ \
+    libsqlite3-0 \
+    libssl3 \
+    libstdc++6 \
+    zlib1g \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r bch2 && useradd -r -g bch2 -d /data -s /bin/bash bch2
@@ -36,7 +49,7 @@ RUN set -eux; \
     find /tmp/extract -type f -name "bitcoincashII-tx" -exec cp -v {} /usr/local/bin/ \; || true; \
     chmod +x /usr/local/bin/bitcoincashII*; \
     rm -rf /tmp/bch2.tar.gz /tmp/extract; \
-    bitcoincashIId --version || bitcoincashIId -version || true
+    bitcoincashIId --version || bitcoincashIId -version
 
 RUN mkdir -p ${BITCOIN_DATA} /holding && chown -R bch2:bch2 /data /holding
 
