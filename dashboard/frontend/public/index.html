@@ -6,11 +6,8 @@
   <title>BCH2 JARVIS // NODE COMMAND</title>
   <link rel="stylesheet" href="styles.css" />
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
-  <div id="bg-canvas"></div>
-  <div class="scanlines"></div>
   <header class="top-bar">
     <div class="logo"><span class="logo-icon">&#9672;</span> BCH2 <span class="accent">JARVIS</span></div>
     <div class="status-cluster">
@@ -34,7 +31,15 @@
       <div class="card-header">BLOCK ROUND</div>
       <div class="round-timer" id="round-timer">00:00</div>
       <div class="progress-bar"><div class="progress-fill" id="round-bar"></div></div>
-      <div>Best share: <span id="best-share">—</span> | Shares: <span id="shares-acc">0</span></div>
+      <div style="font-size:.75rem;margin-top:6px;opacity:.7">Zeit bis ~10-Min-Runde</div>
+      <div style="margin-top:12px">Best share: <span id="best-share">—</span>
+        <span style="opacity:.6">(ever <span id="best-share-ever">—</span>/<span id="best-ever">—</span>)</span>
+        | Shares: <span id="shares-acc">0</span></div>
+      <div style="margin-top:14px;font-size:.7rem;letter-spacing:.1em;opacity:.8">BEST SHARE → BLOCK DIFF</div>
+      <div class="progress-bar" style="margin-top:6px">
+        <div class="progress-fill" id="near-block-bar" style="background:linear-gradient(90deg,#ff00aa,#00f0ff,#00ff9d)"></div>
+      </div>
+      <div id="near-block-pct" style="font-size:.75rem;margin-top:6px;font-family:Share Tech Mono,monospace;opacity:.85">—</div>
     </section>
     <section class="card">
       <div class="card-header">BLOCK PARTS</div>
