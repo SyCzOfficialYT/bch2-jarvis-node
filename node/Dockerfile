@@ -1,12 +1,11 @@
-# Bitcoin Cash II Core – binary + full runtime libs
-FROM debian:bookworm-slim
+# Bitcoin Cash II Core – needs GLIBCXX_3.4.31+ (Ubuntu 24.04 / GCC 13)
+FROM ubuntu:24.04
 
 ARG VERSION=27.0.2
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV BITCOIN_DATA=/data/.bitcoincashII
 
-# ALL runtime libs the release binary typically needs
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -17,19 +16,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libnatpmp1 \
     libevent-2.1-7 \
     libevent-pthreads-2.1-7 \
-    libboost-system1.74.0 \
-    libboost-filesystem1.74.0 \
-    libboost-thread1.74.0 \
-    libboost-chrono1.74.0 \
-    libboost-program-options1.74.0 \
+    libboost-system1.83.0 \
+    libboost-filesystem1.83.0 \
+    libboost-thread1.83.0 \
+    libboost-chrono1.83.0 \
+    libboost-program-options1.83.0 \
     libdb5.3++ \
     libsqlite3-0 \
     libssl3 \
     libstdc++6 \
     libzmq5 \
     zlib1g \
-    && rm -rf /var/lib/apt/lists/* \
-    && ls -la /usr/lib/*/libnatpmp.so* /usr/lib/*/libminiupnpc.so* || true
+    && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r bch2 && useradd -r -g bch2 -d /data -s /bin/bash bch2
 
@@ -52,10 +50,8 @@ RUN set -eux; \
     find /tmp/extract -type f -name "bitcoincashII-tx" -exec cp -v {} /usr/local/bin/ \; || true; \
     chmod +x /usr/local/bin/bitcoincashII*; \
     rm -rf /tmp/bch2.tar.gz /tmp/extract; \
-    echo "=== ldd bitcoincashIId ==="; \
-    ldd /usr/local/bin/bitcoincashIId || true; \
-    echo "=== version ==="; \
-    bitcoincashIId --version || bitcoincashIId -version || true
+    strings /usr/lib/*/libstdc++.so.6 | grep GLIBCXX | tail -5; \
+    bitcoincashIId --version
 
 RUN mkdir -p ${BITCOIN_DATA} /holding && chown -R bch2:bch2 /data /holding
 
