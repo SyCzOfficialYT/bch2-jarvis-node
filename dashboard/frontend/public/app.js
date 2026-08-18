@@ -17,6 +17,16 @@
     return v.toFixed(2) + " " + u[i];
   }
 
+  function fmtShare(d) {
+    if (d == null || d <= 0 || isNaN(d)) return "\u2014";
+    const n = Number(d);
+    const units = ["", "K", "M", "G", "T", "P"];
+    let i = 0, v = n;
+    while (v >= 1000 && i < units.length - 1) { v /= 1000; i++; }
+    const digits = v >= 100 ? 0 : v >= 10 ? 1 : 2;
+    return v.toFixed(digits) + (units[i] ? units[i] : "");
+  }
+
   function update(d) {
     if (!d) return;
     const st = d.status || "?";
@@ -35,7 +45,10 @@
     const j = (d.stratum && d.stratum.job) || {};
 
     set("#my-hash", fmtH(m.hashrate_5m));
-    set("#best-share", r.best_share ? Number(r.best_share).toFixed(1) : "\u2014");
+    const best = r.best_share || r.best_share_ever || 0;
+    const bestEver = r.best_share_ever || best;
+    set("#best-share", fmtShare(best));
+    set("#best-share-ever", fmtShare(bestEver));
     set("#shares-acc", m.shares_accepted != null ? m.shares_accepted : 0);
 
     const el = r.elapsed_sec || 0;
@@ -46,17 +59,39 @@
     const bar = $("#round-bar");
     if (bar) bar.style.width = Math.min(100, r.progress_pct || 0) + "%";
 
+    const netDiff = Number(j.network_diff || d.difficulty || 0);
+    const nearEl = $("#near-block-pct");
+    const nearBar = $("#near-block-bar");
+    if (netDiff > 0 && best > 0) {
+      const poolFloor = 1024;
+      const logBest = Math.log10(Math.max(best, poolFloor));
+      const logNet = Math.log10(Math.max(netDiff, poolFloor));
+      const logFloor = Math.log10(poolFloor);
+      let pct = ((logBest - logFloor) / (logNet - logFloor)) * 100;
+      pct = Math.max(0, Math.min(100, pct));
+      const linearPct = (best / netDiff) * 100;
+      if (nearBar) nearBar.style.width = pct + "%";
+      if (nearEl) {
+        nearEl.textContent =
+          fmtShare(best) + " / " + fmtShare(netDiff) +
+          "  (" + (linearPct >= 0.01 ? linearPct.toFixed(2) : linearPct.toExponential(1)) + "% linear)";
+      }
+    } else {
+      if (nearBar) nearBar.style.width = "0%";
+      if (nearEl) nearEl.textContent = "noch kein Share diese Runde";
+    }
+
     const bal = d.balance || {};
     set("#bal-total", (bal.total != null ? bal.total : 0).toFixed(8));
 
     const holding = d.holding_address || (d.stratum && d.stratum.holding_address) || "generating\u2026";
     set("#holding-addr", holding);
 
-    const parts = j.parts || [];
+    const partsList = j.parts || [];
     const bp = $("#block-parts");
     if (bp) {
-      bp.innerHTML = parts.length
-        ? parts.map(function (p) {
+      bp.innerHTML = partsList.length
+        ? partsList.map(function (p) {
             return '<div class="part' + (p.active ? " active" : "") + '">' + (p.label || "") + "</div>";
           }).join("")
         : "WAITING\u2026";
