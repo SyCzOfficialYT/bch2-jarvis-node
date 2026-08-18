@@ -65,14 +65,34 @@
     set("#last-update", d.last_update
       ? new Date(d.last_update * 1000).toLocaleTimeString("de-DE")
       : "\u2014");
+
+    const slog = (d.stratum && d.stratum.log) || [];
+    const f = $("#log-feed");
+    if (f && slog.length) {
+      const newest = slog[0];
+      const key = newest && (newest.ts + ":" + newest.msg);
+      if (key && key !== f.dataset.lastTs) {
+        f.dataset.lastTs = key;
+        const frag = document.createDocumentFragment();
+        slog.slice(0, 50).reverse().forEach(function (e) {
+          const div = document.createElement("div");
+          const t = e.ts ? new Date(e.ts * 1000).toLocaleTimeString("de-DE") : "";
+          div.textContent = "[" + t + "][" + (e.level || "info") + "] " + (e.msg || "");
+          if (e.level === "ok") div.style.color = "#00ff9d";
+          if (e.level === "warn") div.style.color = "#ffcc00";
+          frag.appendChild(div);
+        });
+        f.innerHTML = "";
+        f.appendChild(frag);
+      }
+    }
   }
 
   async function tick() {
     try {
       const r = await fetch("/api/overview");
       if (!r.ok) throw new Error("HTTP " + r.status);
-      const data = await r.json();
-      update(data);
+      update(await r.json());
     } catch (e) {
       log("API: " + e.message);
       const st = $("#status-text");
@@ -90,7 +110,7 @@
     clock();
     setInterval(clock, 1000);
     tick();
-    setInterval(tick, 4000);
+    setInterval(tick, 3000);
     try {
       const proto = location.protocol === "https:" ? "wss:" : "ws:";
       const ws = new WebSocket(proto + "//" + location.host + "/ws");
@@ -100,7 +120,6 @@
           if (m.payload) update(m.payload);
         } catch (_) {}
       };
-      ws.onerror = function () { log("WS offline \u2013 polling only"); };
     } catch (_) {}
   });
 })();
