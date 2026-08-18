@@ -16,7 +16,7 @@ STATS_PORT = int(os.getenv("STATS_PORT", "8080"))
 HOLDING_FILE = Path("/holding/holding_address.txt")
 SHARES_DIR = Path("/shares"); SHARES_DIR.mkdir(parents=True, exist_ok=True)
 RPC_URL = f"http://{RPC_USER}:{RPC_PASSWORD}@{RPC_HOST}:{RPC_PORT}"
-DEFAULT_DIFF = float(os.getenv("START_DIFF", "1024"))
+DEFAULT_DIFF = float(os.getenv("START_DIFF", "8192"))
 EN1, EN2 = 4, 4
 
 def sha256d(b: bytes) -> bytes:
@@ -276,7 +276,7 @@ async def main():
     stats["payout_address"] = load_holding()
     log("="*56)
     log("BCH2 JARVIS Stratum v3 – version-roll + share fix")
-    log(f"Stratum :{STRATUM_PORT}  Stats :{STATS_PORT}")
+    log(f"Stratum :{STRATUM_PORT}  Stats :{STATS_PORT}  Diff={DEFAULT_DIFF}")
     log(f"Holding: {stats['payout_address']}")
     log("="*56)
     await refresh_job()
