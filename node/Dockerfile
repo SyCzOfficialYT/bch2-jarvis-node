@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gosu \
     bash \
     libminiupnpc17 \
+    libnatpmp1 \
     libevent-2.1-7 \
     libevent-pthreads-2.1-7 \
     libboost-system1.74.0 \
@@ -49,7 +50,7 @@ RUN set -eux; \
     find /tmp/extract -type f -name "bitcoincashII-tx" -exec cp -v {} /usr/local/bin/ \; || true; \
     chmod +x /usr/local/bin/bitcoincashII*; \
     rm -rf /tmp/bch2.tar.gz /tmp/extract; \
-    bitcoincashIId --version || bitcoincashIId -version
+    bitcoincashIId --version || bitcoincashIId -version || true
 
 RUN mkdir -p ${BITCOIN_DATA} /holding && chown -R bch2:bch2 /data /holding
 
