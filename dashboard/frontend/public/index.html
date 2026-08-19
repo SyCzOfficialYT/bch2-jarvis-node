@@ -18,9 +18,15 @@
   <main class="dashboard">
     <section class="hero-grid">
       <div class="card"><div class="card-label">HEIGHT</div><div class="card-value" id="blocks">—</div></div>
-      <div class="card"><div class="card-label">DIFFICULTY</div><div class="card-value" id="difficulty">—</div></div>
-      <div class="card"><div class="card-label">NET HASH</div><div class="card-value" id="net-hash">—</div></div>
+      <div class="card"><div class="card-label">NETWORK DIFF</div><div class="card-value" id="difficulty">—</div></div>
+      <div class="card"><div class="card-label">NETWORK HASH</div><div class="card-value" id="net-hash">—</div></div>
       <div class="card"><div class="card-label">YOUR HASH</div><div class="card-value" id="my-hash">—</div></div>
+    </section>
+    <section class="hero-grid">
+      <div class="card"><div class="card-label">POOL DIFF</div><div class="card-value" id="pool-diff">—</div></div>
+      <div class="card"><div class="card-label">ACCEPTED</div><div class="card-value" id="shares-accepted">0</div></div>
+      <div class="card"><div class="card-label">REJECTED</div><div class="card-value" id="shares-rejected">0</div></div>
+      <div class="card"><div class="card-label">REJECT RATE</div><div class="card-value" id="reject-rate">0%</div></div>
     </section>
     <section class="card">
       <div class="card-header">HOLDING BALANCE</div>
@@ -33,20 +39,25 @@
       <div class="progress-bar"><div class="progress-fill" id="round-bar"></div></div>
       <div style="font-size:.75rem;margin-top:6px;opacity:.7">Zeit bis ~10-Min-Runde</div>
       <div style="margin-top:12px">Best share: <span id="best-share">—</span>
-        <span style="opacity:.6">(ever <span id="best-share-ever">—</span>/<span id="best-ever">—</span>)</span>
-        | Shares: <span id="shares-acc">0</span></div>
-      <div style="margin-top:14px;font-size:.7rem;letter-spacing:.1em;opacity:.8">BEST SHARE → BLOCK DIFF</div>
-      <div class="progress-bar" style="margin-top:6px">
-        <div class="progress-fill" id="near-block-bar" style="background:linear-gradient(90deg,#ff00aa,#00f0ff,#00ff9d)"></div>
-      </div>
+        <span style="opacity:.6">(ever <span id="best-share-ever">—</span>)</span></div>
+      <div style="margin-top:14px;font-size:.7rem;letter-spacing:.1em;opacity:.8">BEST SHARE → NETWORK DIFF</div>
+      <div class="progress-bar" style="margin-top:6px"><div class="progress-fill" id="near-block-bar"></div></div>
       <div id="near-block-pct" style="font-size:.75rem;margin-top:6px;font-family:Share Tech Mono,monospace;opacity:.85">—</div>
+    </section>
+    <section class="card">
+      <div class="card-header">WORKERS</div>
+      <div id="workers-list" class="log-feed">No workers connected.</div>
+    </section>
+    <section class="card">
+      <div class="card-header">BLOCKS FOUND</div>
+      <div id="blocks-found" class="log-feed">No blocks found.</div>
     </section>
     <section class="card">
       <div class="card-header">BLOCK PARTS</div>
       <div class="block-parts" id="block-parts">WAITING…</div>
     </section>
     <section class="card">
-      <div class="card-header">LOG</div>
+      <div class="card-header">LIVE STRATUM LOG</div>
       <div id="log-feed" class="log-feed"></div>
     </section>
   </main>
