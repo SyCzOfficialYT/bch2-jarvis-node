@@ -8,7 +8,7 @@ from version_rolling import DEFAULT_VERSION_MASK, negotiate_mask, resolve_versio
 
 def test_negotiate_mask_intersects_miner_and_server_masks():
     assert negotiate_mask(0xFFFFFFFF) == DEFAULT_VERSION_MASK
-    assert negotiate_mask(0x00003000) == 0x00003000
+    assert negotiate_mask(0x00003000) == 0x00002000
 
 
 def test_resolve_version_uses_version_bits_not_full_version():
@@ -18,7 +18,7 @@ def test_resolve_version_uses_version_bits_not_full_version():
 
 def test_resolve_version_preserves_job_bits_outside_mask():
     job_version = "e0000000"
-    assert resolve_version(job_version, "00003000", DEFAULT_VERSION_MASK) == "e0003000"
+    assert resolve_version(job_version, "00002000", DEFAULT_VERSION_MASK) == "e0002000"
 
 
 def test_resolve_version_rejects_bits_outside_mask():
