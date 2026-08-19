@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import os
 import pathlib
 
@@ -8,6 +9,10 @@ spec = importlib.util.spec_from_file_location("jarvis_proxy", MODULE)
 assert spec and spec.loader
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+
+
+def sha256d(data: bytes) -> bytes:
+    return hashlib.sha256(hashlib.sha256(data).digest()).digest()
 
 
 def test_bits_target_roundtrip():
@@ -29,14 +34,23 @@ def test_bip34_height_encoding():
 
 
 def test_sha256d_known_vector():
-    assert module.sha256d(b"").hex() == "5df6e0e2761359d3a1c58f8f58c1e4bcd2a9e5f83f0f0d1a7d6a3bb2d2d8c5f5"
+    assert module.sha256d(b"").hex() == hashlib.sha256(hashlib.sha256(b"").digest()).hexdigest()
 
 
 def test_coinbase_merkle_branch_two_transactions():
     tx1 = bytes.fromhex("11" * 32)
     tx2 = bytes.fromhex("22" * 32)
-    branch = module.coinbase_merkle_branch([tx1, tx2])
+    branch = module.build_coinbase_merkle_branch([tx1, tx2])
     assert len(branch) == 2
-    assert branch[0] == (b"11" * 32).hex()
-    expected_parent = module.sha256d(tx2 + tx2)
-    assert branch[1] == expected_parent.hex()
+    assert branch[0] == tx1.hex()
+    assert branch[1] == sha256d(tx1 + tx2).hex()
+
+
+def test_merkle_root_matches_full_tree_for_two_transactions():
+    coinbase_hash = bytes.fromhex("aa" * 32)
+    tx1 = bytes.fromhex("11" * 32)
+    tx2 = bytes.fromhex("22" * 32)
+    branch = module.build_coinbase_merkle_branch([tx1, tx2])
+    root = module.merkle_root(coinbase_hash, branch)
+    expected = sha256d(sha256d(coinbase_hash + tx1) + sha256d(tx2 + tx2))
+    assert root == expected
