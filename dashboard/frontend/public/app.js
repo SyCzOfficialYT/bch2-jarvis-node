@@ -24,6 +24,98 @@
     return d.innerHTML;
   }
 
+  function fmtPct(v) {
+    const n = Number(v || 0);
+    if (!Number.isFinite(n)) return "—";
+    if (n >= 1) return n.toFixed(3) + "%";
+    if (n >= 0.01) return n.toFixed(4) + "%";
+    return n.toExponential(2) + "%";
+  }
+
+  function drawDifficulty(history) {
+    const svg = $("#difficulty-chart");
+    if (!svg) return;
+    const points = (history || []).map(p => ({ t: Number(p.t), v: Number(p.v) })).filter(p => p.v > 0);
+    svg.innerHTML = "";
+    if (points.length < 2) {
+      svg.innerHTML = '<text x="450" y="115" text-anchor="middle" fill="currentColor" opacity=".5" font-family="Share Tech Mono,monospace" font-size="13">Waiting for difficulty samples…</text>';
+      return;
+    }
+
+    const W = 900, H = 220, padX = 22, padY = 20;
+    const vals = points.map(p => p.v);
+    const min = Math.min(...vals), max = Math.max(...vals);
+    const lo = Math.max(0, min - (max - min || max * 0.05) * 0.08);
+    const hi = max + (max - min || max * 0.05) * 0.08;
+    const span = Math.max(hi - lo, 1);
+    const x = i => padX + (i / (points.length - 1)) * (W - padX * 2);
+    const y = v => H - padY - ((v - lo) / span) * (H - padY * 2);
+    const poly = points.map((p, i) => `${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
+    const area = `${padX},${H - padY} ${poly} ${W - padX},${H - padY}`;
+
+    const grid = [0.25, 0.5, 0.75].map(fr => {
+      const yy = padY + fr * (H - padY * 2);
+      return `<line x1="${padX}" y1="${yy}" x2="${W - padX}" y2="${yy}" stroke="currentColor" opacity=".08"/>`;
+    }).join("");
+
+    svg.innerHTML = `
+      ${grid}
+      <polygon points="${area}" fill="currentColor" opacity=".035" />
+      <polyline points="${poly}" fill="none" stroke="currentColor" stroke-width="2.5" vector-effect="non-scaling-stroke" />
+      <text x="${padX}" y="15" fill="currentColor" opacity=".5" font-family="Share Tech Mono,monospace" font-size="11">${esc(fmtShare(max))}</text>
+      <text x="${padX}" y="${H - 5}" fill="currentColor" opacity=".5" font-family="Share Tech Mono,monospace" font-size="11">${esc(fmtShare(min))}</text>
+    `;
+    const current = points[points.length - 1].v;
+    const range = $("#difficulty-range");
+    if (range) range.textContent = `range ${fmtShare(min)} → ${fmtShare(max)} · ${points.length} samples`;
+    const currentEl = $("#difficulty-current");
+    if (currentEl) currentEl.textContent = fmtShare(current);
+  }
+
+  function updateBlockParts(j, r) {
+    const el = $("#block-parts");
+    if (!el) return;
+    if (!j || !j.height) {
+      el.innerHTML = '<div class="part waiting">WAITING…</div>';
+      return;
+    }
+    const best = Number(r?.best_share || 0);
+    const net = Number(j.network_diff || 0);
+    const parts = [
+      ["HEIGHT", `#${j.height}`],
+      ["VERSION", j.version || "—"],
+      ["PREV HASH", j.prevhash || "—"],
+      ["MERKLE BRANCH", `${Array.isArray(j.merkle_branch) ? j.merkle_branch.length : 0} tx layers`],
+      ["NTIME", j.ntime || "—"],
+      ["NBITS", j.nbits || "—"],
+      ["TXS", String(j.transactions ?? 0)],
+      ["COINBASE", j.coinbasevalue != null ? `${(Number(j.coinbasevalue) / 1e8).toFixed(8)} BCH2` : "—"],
+      ["NETWORK TARGET", fmtShare(net)],
+      ["BEST SHARE", fmtShare(best)],
+      ["JOB", j.job_id || "—"]
+    ];
+    el.innerHTML = parts.map(([label, value]) =>
+      `<div class="part active"><span class="part-label">${esc(label)}</span><span class="part-value" title="${esc(value)}">${esc(value)}</span></div>`
+    ).join("");
+  }
+
+  function updateBlocks(blocks) {
+    const blocksEl = $("#blocks-found");
+    if (!blocksEl) return;
+    if (!blocks || !blocks.length) {
+      blocksEl.textContent = "No blocks found.";
+      return;
+    }
+    blocksEl.innerHTML = blocks.slice(0, 20).map(b => {
+      const status = String(b.status || "unknown").toUpperCase();
+      const conf = Number(b.confirmations || 0);
+      const mat = Number(b.maturity_blocks || 100);
+      const progress = Math.min(100, conf / mat * 100);
+      const reward = Number(b.reward || 0).toFixed(8);
+      return `<div><strong>${esc(status)}</strong> height=${esc(b.height)} worker=${esc(b.worker)} diff=${esc(fmtShare(b.share_diff))} reward=${reward} BCH2 · ${conf}/${mat} confirmations · ${progress.toFixed(1)}% maturity</div>`;
+    }).join("");
+  }
+
   function update(d) {
     if (!d) return;
     const st = d.status || "?";
@@ -34,12 +126,13 @@
 
     const set = (id, val) => { const el = $(id); if (el) el.textContent = val; };
     set("#blocks", d.blocks != null ? d.blocks : "—");
-    set("#difficulty", d.difficulty ? Number(d.difficulty).toExponential(2) : "—");
+    set("#difficulty", d.difficulty ? fmtShare(d.difficulty) : "—");
     set("#net-hash", fmtH(d.network_hashps));
 
-    const m = (d.stratum && d.stratum.mining) || {};
-    const r = (d.stratum && d.stratum.round) || {};
-    const j = (d.stratum && d.stratum.job) || {};
+    const stData = d.stratum || {};
+    const m = stData.mining || {};
+    const r = stData.round || {};
+    const j = stData.job || {};
 
     set("#pool-diff", m.share_difficulty ? Number(m.share_difficulty).toLocaleString("de-DE") : "—");
     set("#my-hash", fmtH(m.hashrate_5m));
@@ -48,8 +141,8 @@
     const total = Number(m.shares_accepted || 0) + Number(m.shares_rejected || 0);
     set("#reject-rate", total ? ((Number(m.shares_rejected || 0) / total) * 100).toFixed(2) + "%" : "0%");
 
-    const best = r.best_share || 0;
-    const bestEver = r.best_share_ever || best;
+    const best = Number(r.best_share || 0);
+    const bestEver = Number(r.best_share_ever || best);
     set("#best-share", fmtShare(best));
     set("#best-share-ever", fmtShare(bestEver));
 
@@ -60,27 +153,42 @@
     const bar = $("#round-bar");
     if (bar) bar.style.width = Math.min(100, Number(r.progress_pct || 0)) + "%";
 
-    const netDiff = Number(j.network_diff || d.difficulty || 0);
+    const netDiff = Number(r.network_diff || j.network_diff || d.difficulty || 0);
     const nearEl = $("#near-block-pct");
     const nearBar = $("#near-block-bar");
     if (netDiff > 0 && best > 0) {
-      const poolFloor = 1024;
-      const logBest = Math.log10(Math.max(best, poolFloor));
-      const logNet = Math.log10(Math.max(netDiff, poolFloor));
-      const logFloor = Math.log10(poolFloor);
-      let pct = logNet > logFloor ? ((logBest - logFloor) / (logNet - logFloor)) * 100 : 0;
-      pct = Math.max(0, Math.min(100, pct));
-      const linearPct = (best / netDiff) * 100;
-      if (nearBar) nearBar.style.width = pct + "%";
-      if (nearEl) nearEl.textContent = fmtShare(best) + " / " + fmtShare(netDiff) + " (" + (linearPct >= 0.01 ? linearPct.toFixed(2) : linearPct.toExponential(1)) + "% linear)";
+      const linearPct = Math.max(0, Math.min(100, (best / netDiff) * 100));
+      const remaining = best > 0 ? netDiff / best : 0;
+      if (nearBar) nearBar.style.width = linearPct + "%";
+      if (nearEl) nearEl.textContent = `${fmtShare(best)} / ${fmtShare(netDiff)} · ${fmtPct(linearPct)} of current target · ${remaining >= 1 ? remaining.toFixed(0) + "× more work" : "BLOCK TARGET HIT"}`;
     } else {
       if (nearBar) nearBar.style.width = "0%";
       if (nearEl) nearEl.textContent = "noch kein Share diese Runde";
     }
 
     const bal = d.balance || {};
-    set("#bal-total", (Number(bal.total || 0)).toFixed(8));
-    set("#holding-addr", d.holding_address || "—");
+    const miningBal = stData.balances || {};
+    set("#bal-unconfirmed", Number(miningBal.unconfirmed ?? bal.unconfirmed ?? 0).toFixed(8));
+    set("#bal-confirmed", Number(miningBal.confirmed ?? bal.confirmed ?? 0).toFixed(8));
+    set("#bal-total", Number(miningBal.total ?? bal.total ?? 0).toFixed(8));
+    set("#maturity-label", `Coinbase maturity: ${stData.maturity_blocks || 100} blocks`);
+    set("#holding-addr", d.holding_address || stData.holding_address || "—");
+
+    const competition = stData.competition || {};
+    set("#competition-pct", fmtPct(competition.your_network_pct));
+    set("#competition-ppm", Number(competition.network_share_ppm || 0).toFixed(2) + " ppm");
+    set("#competition-hash", fmtH(competition.your_hashrate));
+    const competitionBar = $("#competition-bar");
+    if (competitionBar) competitionBar.style.width = Math.min(100, Number(competition.your_network_pct || 0)) + "%";
+    const competitionCaption = $("#competition-caption");
+    if (competitionCaption) {
+      const nh = fmtH(competition.network_hashrate);
+      competitionCaption.textContent = `You ${fmtH(competition.your_hashrate)} vs network ${nh} · live 5m estimate`;
+    }
+
+    drawDifficulty(d.history_diff || []);
+    updateBlockParts(j, r);
+    updateBlocks(stData.blocks_found || []);
 
     const workers = m.workers || {};
     const workersEl = $("#workers-list");
@@ -91,15 +199,7 @@
       ).join("") : "No workers connected.";
     }
 
-    const blocks = d.stratum && Array.isArray(d.stratum.blocks_found) ? d.stratum.blocks_found : [];
-    const blocksEl = $("#blocks-found");
-    if (blocksEl) {
-      blocksEl.innerHTML = blocks.length ? blocks.slice(0, 20).map(b =>
-        `<div>height=${esc(b.height)} worker=${esc(b.worker)} diff=${esc(fmtShare(b.share_diff))} status=${esc(b.status)}</div>`
-      ).join("") : "No blocks found.";
-    }
-
-    const slog = (d.stratum && d.stratum.log) || [];
+    const slog = stData.log || [];
     const f = $("#log-feed");
     if (f) {
       f.innerHTML = slog.slice(0, 80).map(e => {
