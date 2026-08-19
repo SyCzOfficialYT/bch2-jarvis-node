@@ -10,10 +10,14 @@ fi
 : "${RPC_PASSWORD:?RPC_PASSWORD is required}"
 
 DATADIR=/data/.bitcoincashII
-RUNTIME_CONF="$DATADIR/runtime.conf"
+CONF="$DATADIR/bitcoincashII.conf"
 mkdir -p "$DATADIR" /holding
 
-cat > "$RUNTIME_CONF" <<EOF
+# Keep exactly one canonical node configuration in the persistent datadir.
+# Older releases generated runtime.conf and left bitcoincashII.conf behind;
+# BCH2 Core treats that as a fatal ignored-config condition. Overwrite the
+# canonical file on startup instead of passing a second -conf argument.
+cat > "$CONF" <<EOF
 server=1
 daemon=0
 listen=1
@@ -38,6 +42,9 @@ disablewallet=0
 printtoconsole=1
 logtimestamps=1
 EOF
-chmod 600 "$RUNTIME_CONF"
+chmod 600 "$CONF"
+
+# Remove the obsolete generated config from older JARVIS releases if present.
+rm -f "$DATADIR/runtime.conf"
 
 exec "$@"
