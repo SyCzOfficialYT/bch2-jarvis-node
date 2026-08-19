@@ -43,7 +43,7 @@ def test_coinbase_merkle_branch_two_transactions():
     branch = module.build_coinbase_merkle_branch([tx1, tx2])
     assert len(branch) == 2
     assert branch[0] == tx1.hex()
-    assert branch[1] == sha256d(tx1 + tx2).hex()
+    assert branch[1] == sha256d(tx2 + tx2).hex()
 
 
 def test_merkle_root_matches_full_tree_for_two_transactions():
