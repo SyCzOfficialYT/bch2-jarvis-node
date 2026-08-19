@@ -11,10 +11,12 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN python -m pip install --no-cache-dir --only-binary=:all: -r requirements.txt
 
-COPY proxy.py .
-RUN python -m py_compile proxy.py \
-    && ! grep -q 'PLACEHOLDER' proxy.py
+COPY proxy.py version_rolling.py run.py ./
+RUN python -m py_compile proxy.py version_rolling.py run.py \
+    && ! grep -q 'PLACEHOLDER' proxy.py \
+    && ! grep -q 'PLACEHOLDER' version_rolling.py \
+    && ! grep -q 'PLACEHOLDER' run.py
 
 EXPOSE 3333 8080
 
-CMD ["python", "-u", "proxy.py"]
+CMD ["python", "-u", "run.py"]
