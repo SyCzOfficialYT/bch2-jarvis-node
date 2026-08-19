@@ -97,7 +97,14 @@ async def fixed_submit(self: proxy.Session, request_id: Any, params: list[Any]) 
     is_block = bool(j["target"] and hash_int <= j["target"])
     proxy.stats["shares_accepted"] += 1
     proxy.stats["last_share_at"] = time.time()
-    proxy.share_window.append((time.time(), share_diff))
+
+    # Hashrate estimation must use the assigned Stratum difficulty, not the
+    # lucky difficulty of the submitted hash.  The latter is useful for
+    # BEST SHARE, but using it for hashrate makes lucky shares create wildly
+    # inflated TH/s/PHash estimates. One accepted share represents one unit
+    # of work at the miner's assigned share difficulty.
+    proxy.share_window.append((time.time(), self.difficulty))
+
     proxy.stats["best_share_diff"] = max(proxy.stats["best_share_diff"], share_diff)
     proxy.stats["best_share_ever"] = max(proxy.stats["best_share_ever"], share_diff)
 
