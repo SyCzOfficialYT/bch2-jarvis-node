@@ -1,61 +1,64 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
 DATADIR=/data/.bitcoincashII
 HOLDING=/holding
-CLI="bitcoincashII-cli -rpcconnect=bch2-node -rpcport=8342 -rpcuser=jarvis -rpcpassword=xz8A1Grk9NAKk4l2QerGwCmcwtVoGh62 -datadir=$DATADIR"
+: "${RPC_USER:?RPC_USER is required}"
+: "${RPC_PASSWORD:?RPC_PASSWORD is required}"
+RPC_WALLET="${RPC_WALLET:-jarvis}"
+CLI=(bitcoincashII-cli -rpcconnect=bch2-node -rpcport=8342 -rpcuser="$RPC_USER" -rpcpassword="$RPC_PASSWORD" -datadir="$DATADIR" -conf="$DATADIR/runtime.conf")
 
-echo "=== BCH2 JARVIS Wallet Init ==="
+wait_for_rpc() {
+  for i in $(seq 1 90); do
+    if "${CLI[@]}" getblockchaininfo >/dev/null 2>&1; then
+      echo "Node RPC ready"
+      return 0
+    fi
+    echo "Waiting for node RPC... ($i/90)"
+    sleep 3
+  done
+  echo "ERROR: Node RPC not reachable after wait" >&2
+  return 1
+}
 
-for i in $(seq 1 90); do
-  if $CLI getblockchaininfo >/dev/null 2>&1; then
-    echo "Node RPC ready"
-    break
+create_or_load_wallet() {
+  local wallets
+  wallets=$("${CLI[@]}" listwallets 2>/dev/null || printf '[]')
+  if ! grep -q '"'"${RPC_WALLET}"'"' <<<"$wallets"; then
+    echo "Creating wallet '$RPC_WALLET'..."
+    "${CLI[@]}" createwallet "$RPC_WALLET" >/dev/null
   fi
-  echo "Waiting for node RPC... ($i/90)"
-  sleep 3
-done
+  "${CLI[@]}" loadwallet "$RPC_WALLET" >/dev/null 2>&1 || true
+}
 
-if ! $CLI getblockchaininfo >/dev/null 2>&1; then
-  echo "ERROR: Node RPC not reachable after wait"
-  exit 1
-fi
+wait_for_rpc
+create_or_load_wallet
 
-WALLETS=$($CLI listwallets 2>/dev/null || echo "[]")
-if ! echo "$WALLETS" | grep -q "jarvis"; then
-  echo "Creating wallet 'jarvis'..."
-  $CLI createwallet "jarvis" false false "" false false true 2>/dev/null || \
-  $CLI createwallet "jarvis" 2>/dev/null || true
-fi
-
-$CLI loadwallet "jarvis" 2>/dev/null || true
-
-CLI_W="$CLI -rpcwallet=jarvis"
-
+CLI_W=("${CLI[@]}" "-rpcwallet=$RPC_WALLET")
 mkdir -p "$HOLDING"
-if [ -f "$HOLDING/holding_address.txt" ] && [ -s "$HOLDING/holding_address.txt" ]; then
-  ADDR=$(cat "$HOLDING/holding_address.txt")
+
+if [[ -s "$HOLDING/holding_address.txt" ]]; then
+  ADDR=$(<"$HOLDING/holding_address.txt")
   echo "Existing holding address: $ADDR"
 else
   echo "Generating new holding address..."
-  ADDR=$($CLI_W getnewaddress "holding" 2>/dev/null || $CLI getnewaddress "holding")
-  if [ -z "$ADDR" ]; then
-    echo "ERROR: could not generate address"
-    exit 1
-  fi
-  echo "$ADDR" > "$HOLDING/holding_address.txt"
+  ADDR=$("${CLI_W[@]}" getnewaddress holding)
+  [[ -n "$ADDR" ]] || { echo "ERROR: could not generate address" >&2; exit 1; }
+  printf '%s\n' "$ADDR" > "$HOLDING/holding_address.txt"
   chmod 644 "$HOLDING/holding_address.txt"
   echo "New holding address created: $ADDR"
 fi
 
+INFO=$("${CLI_W[@]}" getaddressinfo "$ADDR")
+printf '%s\n' "$INFO" | grep -q '"scriptPubKey"' || { echo "ERROR: holding address has no scriptPubKey" >&2; exit 1; }
+
 cat > "$HOLDING/status.json" <<STATUS
 {
-  "holding_address": "$ADDR",
+  "holding_address": "${ADDR}",
   "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "wallet": "jarvis"
+  "wallet": "${RPC_WALLET}"
 }
 STATUS
 
 echo "=== Wallet init complete ==="
 echo "HOLDING ADDRESS: $ADDR"
-exit 0
