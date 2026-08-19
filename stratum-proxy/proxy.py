@@ -36,6 +36,7 @@ BLOCKS_LOG = SHARES_DIR / "blocks_found.json"
 DIFF1 = 0x00000000FFFF0000000000000000000000000000000000000000000000000000
 EXTRANONCE2_BYTES = 4
 MAX_COINBASE_SCRIPTSIG = 100
+DEFAULT_VERSION_MASK = 0x1FFFE000
 
 if not RPC_PASSWORD:
     raise RuntimeError("RPC_PASSWORD is not configured")
@@ -183,20 +184,12 @@ def make_coinbase(height: int, coinbase_value: int, payout_script: bytes) -> tup
     if len(script_sig_prefix) + extranonce_len > MAX_COINBASE_SCRIPTSIG:
         raise RuntimeError("coinbase scriptSig would exceed consensus limit")
     prefix = (
-        u32le(2)
-        + b"\x01"
-        + (b"\x00" * 32)
-        + b"\xff\xff\xff\xff"
-        + compact_size(len(script_sig_prefix) + extranonce_len)
-        + script_sig_prefix
+        u32le(2) + b"\x01" + (b"\x00" * 32) + b"\xff\xff\xff\xff"
+        + compact_size(len(script_sig_prefix) + extranonce_len) + script_sig_prefix
     )
     suffix = (
-        b"\xff\xff\xff\xff"
-        + b"\x01"
-        + u64le(coinbase_value)
-        + compact_size(len(payout_script))
-        + payout_script
-        + u32le(0)
+        b"\xff\xff\xff\xff" + b"\x01" + u64le(coinbase_value)
+        + compact_size(len(payout_script)) + payout_script + u32le(0)
     )
     return prefix.hex(), suffix.hex()
 
@@ -206,8 +199,6 @@ def merkle_parent(left: bytes, right: bytes) -> bytes:
 
 
 def build_coinbase_merkle_branch(transaction_hashes_le: list[bytes]) -> list[str]:
-    """Return the Merkle path for a coinbase at transaction index zero."""
-    # Coinbase is index zero. The input list contains only non-coinbase TX hashes.
     level = [b"\x00" * 32] + list(transaction_hashes_le)
     branch: list[str] = []
     index = 0
@@ -241,25 +232,35 @@ def template_transaction_hashes(template: dict[str, Any]) -> list[bytes]:
     return result
 
 
-def build_header(
-    j: dict[str, Any],
-    version_hex: str,
-    ntime_hex: str,
-    nonce_hex: str,
-    extranonce1: str,
-    extranonce2: str,
-) -> tuple[bytes, bytes, int, float]:
+def _validate_hex(value: str, width: int, field: str) -> str:
+    value = str(value).strip().lower()
+    if len(value) > width or not value:
+        raise ValueError(f"invalid {field} length")
+    value = value.zfill(width)
+    try:
+        int(value, 16)
+    except ValueError as exc:
+        raise ValueError(f"invalid {field}") from exc
+    return value
+
+
+def build_header(j: dict[str, Any], version_hex: str, ntime_hex: str, nonce_hex: str, extranonce1: str, extranonce2: str) -> tuple[bytes, bytes, int, float]:
+    version_hex = _validate_hex(version_hex, 8, "version")
+    ntime_hex = _validate_hex(ntime_hex, 8, "ntime")
+    nonce_hex = _validate_hex(nonce_hex, 8, "nonce")
+    extranonce2 = _validate_hex(extranonce2, EXTRANONCE2_BYTES * 2, "extranonce2")
     coinbase = bytes.fromhex(j["coinb1"] + extranonce1 + extranonce2 + j["coinb2"])
-    coinbase_hash = sha256d(coinbase)
-    root = merkle_root(coinbase_hash, j["merkle_branch"])
+    root = merkle_root(sha256d(coinbase), j["merkle_branch"])
     header = (
-        bytes.fromhex(version_hex.zfill(8))[::-1]
+        bytes.fromhex(version_hex)[::-1]
         + bytes.fromhex(j["prevhash"])
         + root
-        + bytes.fromhex(ntime_hex.zfill(8))[::-1]
-        + bytes.fromhex(j["nbits"].zfill(8))[::-1]
-        + bytes.fromhex(nonce_hex.zfill(8))[::-1]
+        + bytes.fromhex(ntime_hex)[::-1]
+        + bytes.fromhex(j["nbits"])[::-1]
+        + bytes.fromhex(nonce_hex)[::-1]
     )
+    if len(header) != 80:
+        raise ValueError(f"constructed header is {len(header)} bytes, expected 80")
     hash_be = sha256d(header)[::-1]
     hash_int = int.from_bytes(hash_be, "big")
     share_diff = DIFF1 / hash_int if hash_int else float("inf")
@@ -299,7 +300,6 @@ async def refresh_job(template: dict[str, Any] | None = None, *, clean_jobs: boo
     payout_script = await load_payout_script()
     coinb1, coinb2 = make_coinbase(height, int(template.get("coinbasevalue", 0)), payout_script)
     branch = build_coinbase_merkle_branch(template_transaction_hashes(template))
-
     previous_height = stats["round_height"]
     if previous_height != height:
         if previous_height:
@@ -308,26 +308,16 @@ async def refresh_job(template: dict[str, Any] | None = None, *, clean_jobs: boo
         stats["round_started"] = time.time()
         stats["best_share_diff"] = 0.0
         clean_jobs = True
-
     job_sequence += 1
     job_id = f"{height}-{job_sequence:08x}"
     new_job = {
-        "job_id": job_id,
-        "height": height,
-        "prevhash": bytes.fromhex(previous_block)[::-1].hex(),
-        "prevhash_be": previous_block,
-        "coinb1": coinb1,
-        "coinb2": coinb2,
-        "merkle_branch": branch,
-        "version": version,
-        "nbits": bits,
-        "ntime": f"{curtime:08x}",
-        "clean": clean_jobs,
-        "target": target,
-        "network_diff": network_diff,
+        "job_id": job_id, "height": height,
+        "prevhash": bytes.fromhex(previous_block)[::-1].hex(), "prevhash_be": previous_block,
+        "coinb1": coinb1, "coinb2": coinb2, "merkle_branch": branch,
+        "version": version, "nbits": bits, "ntime": f"{curtime:08x}", "clean": clean_jobs,
+        "target": target, "network_diff": network_diff,
         "coinbasevalue": int(template.get("coinbasevalue", 0)),
-        "transactions": template.get("transactions", []) or [],
-        "created_at": time.time(),
+        "transactions": template.get("transactions", []) or [], "created_at": time.time(),
         "payout_address": load_holding(),
     }
     job = new_job
@@ -340,14 +330,7 @@ async def refresh_job(template: dict[str, Any] | None = None, *, clean_jobs: boo
 
 def template_fingerprint(template: dict[str, Any]) -> tuple[Any, ...]:
     tx_ids = tuple(tx.get("txid") or tx.get("hash") for tx in template.get("transactions", []) or [])
-    return (
-        int(template.get("height", 0)),
-        str(template.get("previousblockhash", "")),
-        str(template.get("bits", "")),
-        int(template.get("version", 0)),
-        tx_ids,
-        int(template.get("curtime", 0)) // 15,
-    )
+    return (int(template.get("height", 0)), str(template.get("previousblockhash", "")), str(template.get("bits", "")), int(template.get("version", 0)), tx_ids, int(template.get("curtime", 0)) // 15)
 
 
 class Session:
@@ -360,6 +343,8 @@ class Session:
         self.authorized = False
         self.subscribed = False
         self.difficulty = START_DIFF
+        self.version_rolling_enabled = False
+        self.version_rolling_mask = DEFAULT_VERSION_MASK
         self.peer = writer.get_extra_info("peername")
 
     async def send(self, payload: dict[str, Any]) -> None:
@@ -395,10 +380,17 @@ class Session:
             options = params[1] if len(params) > 1 and isinstance(params[1], dict) else {}
             result: dict[str, Any] = {}
             if "version-rolling" in requested:
-                mask = str(options.get("version-rolling.mask", "1fffe000"))
-                result["version-rolling"] = True
-                result["version-rolling.mask"] = mask
-                await self.send({"id": None, "method": "mining.set_version_mask", "params": [mask]})
+                raw_mask = str(options.get("version-rolling.mask", f"{DEFAULT_VERSION_MASK:08x}"))
+                try:
+                    mask = int(raw_mask, 16)
+                except ValueError:
+                    mask = DEFAULT_VERSION_MASK
+                mask &= 0xFFFFFFFF
+                self.version_rolling_enabled = mask != 0
+                self.version_rolling_mask = mask
+                result["version-rolling"] = self.version_rolling_enabled
+                result["version-rolling.mask"] = f"{mask:08x}"
+                await self.send({"id": None, "method": "mining.set_version_mask", "params": [f"{mask:08x}"]})
             await self.send({"id": request_id, "result": result, "error": None})
             return
         if method == "mining.suggest_difficulty":
@@ -426,39 +418,44 @@ class Session:
             await self.send({"id": request_id, "result": False, "error": [20, "bad parameters", None]})
             return
         submitted_job_id = str(params[1])
-        extranonce2 = str(params[2]).zfill(self.extra2_size * 2)
-        ntime = str(params[3]).zfill(8)
-        nonce = str(params[4]).zfill(8)
-        submitted_version = str(params[5]).zfill(8) if len(params) > 5 and params[5] else None
+        extranonce2 = str(params[2]).strip()
+        ntime = str(params[3]).strip()
+        nonce = str(params[4]).strip()
+        submitted_version = str(params[5]).strip() if len(params) > 5 and params[5] else None
         j = jobs.get(submitted_job_id)
         if not j:
             stats["shares_rejected"] += 1
             log(f"REJECT stale job={submitted_job_id}", "warn")
             await self.send({"id": request_id, "result": False, "error": [21, "stale job", None]})
             return
-        versions = [submitted_version] if submitted_version else []
-        versions.append(j["version"])
-        candidates: list[tuple[bytes, bytes, int, float]] = []
-        seen: set[str] = set()
         try:
-            for version in versions:
-                if version in seen:
-                    continue
-                seen.add(version)
-                candidates.append(build_header(j, version, ntime, nonce, self.extra1, extranonce2))
+            extranonce2 = _validate_hex(extranonce2, self.extra2_size * 2, "extranonce2")
+            ntime = _validate_hex(ntime, 8, "ntime")
+            nonce = _validate_hex(nonce, 8, "nonce")
+            version = _validate_hex(submitted_version or j["version"], 8, "version")
+            if submitted_version:
+                if not self.version_rolling_enabled:
+                    raise ValueError("version rolling was not negotiated")
+                base_version = int(j["version"], 16)
+                miner_version = int(version, 16)
+                changed_bits = base_version ^ miner_version
+                if changed_bits & ~self.version_rolling_mask:
+                    raise ValueError(f"version rolling outside mask {self.version_rolling_mask:08x}")
+            header, hash_be, hash_int, share_diff = build_header(j, version, ntime, nonce, self.extra1, extranonce2)
         except (KeyError, ValueError, struct.error) as exc:
             stats["shares_rejected"] += 1
-            log(f"REJECT invalid share: {exc}", "warn")
+            log(f"REJECT invalid share worker={self.worker} job={submitted_job_id}: {exc}", "warn")
             await self.send({"id": request_id, "result": False, "error": [20, "invalid share", None]})
             return
-        header, hash_be, hash_int, share_diff = max(candidates, key=lambda candidate: candidate[3])
+
         share_target = int(DIFF1 / self.difficulty)
         if hash_int > share_target:
             stats["shares_rejected"] += 1
-            append_jsonl(SHARES_LOG, {"ts": time.time(), "accepted": False, "worker": self.worker, "job_id": submitted_job_id, "hash": hash_be.hex(), "share_diff": share_diff, "difficulty": self.difficulty, "reason": "low difficulty"})
-            log(f"REJECT low difficulty worker={self.worker} share_diff≈{share_diff:.6g} need={self.difficulty:.6g}", "warn")
+            append_jsonl(SHARES_LOG, {"ts": time.time(), "accepted": False, "worker": self.worker, "job_id": submitted_job_id, "height": j["height"], "version": version, "ntime": ntime, "nonce": nonce, "extranonce1": self.extra1, "extranonce2": extranonce2, "hash": hash_be.hex(), "hash_int": hash_int, "share_diff": share_diff, "difficulty": self.difficulty, "share_target": f"{share_target:064x}", "network_target": f"{j['target']:064x}", "reason": "low difficulty"})
+            log(f"REJECT low difficulty worker={self.worker} job={submitted_job_id} height={j['height']} version={version} ntime={ntime} nonce={nonce} share_diff≈{share_diff:.8g} need={self.difficulty:.8g}", "warn")
             await self.send({"id": request_id, "result": False, "error": [23, "low difficulty", None]})
             return
+
         is_block = bool(j["target"] and hash_int <= j["target"])
         stats["shares_accepted"] += 1
         stats["last_share_at"] = time.time()
@@ -469,9 +466,9 @@ class Session:
         if worker:
             worker["shares"] += 1
             worker["best_share"] = max(worker["best_share"], share_diff)
-        append_jsonl(SHARES_LOG, {"ts": time.time(), "accepted": True, "worker": self.worker, "job_id": submitted_job_id, "height": j["height"], "hash": hash_be.hex(), "share_diff": share_diff, "difficulty": self.difficulty, "block_candidate": is_block})
+        append_jsonl(SHARES_LOG, {"ts": time.time(), "accepted": True, "worker": self.worker, "job_id": submitted_job_id, "height": j["height"], "version": version, "ntime": ntime, "nonce": nonce, "extranonce1": self.extra1, "extranonce2": extranonce2, "hash": hash_be.hex(), "share_diff": share_diff, "difficulty": self.difficulty, "block_candidate": is_block})
         await self.send({"id": request_id, "result": True, "error": None})
-        log(f"ACCEPT share worker={self.worker} share_diff≈{share_diff:.6g}{' BLOCK' if is_block else ''}", "ok")
+        log(f"ACCEPT share worker={self.worker} job={submitted_job_id} share_diff≈{share_diff:.8g}{' BLOCK' if is_block else ''}", "ok")
         if is_block:
             await self.submit_block(j, header, extranonce2, hash_be)
 
@@ -556,7 +553,7 @@ async def api_health(_: web.Request) -> web.Response:
 async def api_stats(_: web.Request) -> web.Response:
     elapsed = max(0.0, time.time() - stats["round_started"])
     return web.json_response({
-        "version": "6.0-production",
+        "version": "6.1-production",
         "holding_address": load_holding(),
         "job": {"height": job.get("height"), "job_id": job.get("job_id"), "nbits": job.get("nbits"), "network_diff": job.get("network_diff"), "network_target": f"{job.get('target', 0):064x}" if job.get("target") else None, "started_at": job.get("created_at")},
         "round": {"height": stats["round_height"], "started_at": stats["round_started"], "elapsed_sec": elapsed, "target_sec": 600, "progress_pct": min(100.0, elapsed / 600 * 100), "best_share": stats["best_share_diff"], "best_share_ever": stats["best_share_ever"]},
@@ -568,7 +565,7 @@ async def api_stats(_: web.Request) -> web.Response:
 
 async def main() -> None:
     log("=" * 64)
-    log("BCH2 JARVIS Stratum v6.0 PRODUCTION SOLO")
+    log("BCH2 JARVIS Stratum v6.1 PRODUCTION SOLO")
     log(f"Stratum :{STRATUM_PORT} Stats :{STATS_PORT} ShareDiff={START_DIFF}")
     log(f"Holding: {load_holding()}")
     log("=" * 64)
@@ -578,7 +575,6 @@ async def main() -> None:
         raise RuntimeError("Unable to obtain a valid getblocktemplate")
     asyncio.create_task(job_loop())
     asyncio.create_task(telemetry_loop())
-
     app = web.Application()
     app.router.add_get("/health", api_health)
     app.router.add_get("/stats", api_stats)
@@ -586,7 +582,6 @@ async def main() -> None:
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", STATS_PORT).start()
     log(f"Stats API :{STATS_PORT}", "ok")
-
     server = await asyncio.start_server(lambda reader, writer: Session(reader, writer).run(), "0.0.0.0", STRATUM_PORT)
     async with server:
         await server.serve_forever()
