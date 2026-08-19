@@ -15,6 +15,7 @@
       <div class="clock" id="clock">--:--:--</div>
     </div>
   </header>
+
   <main class="dashboard">
     <section class="hero-grid">
       <div class="card"><div class="card-label">HEIGHT</div><div class="card-value" id="blocks">—</div></div>
@@ -22,45 +23,96 @@
       <div class="card"><div class="card-label">NETWORK HASH</div><div class="card-value" id="net-hash">—</div></div>
       <div class="card"><div class="card-label">YOUR HASH</div><div class="card-value" id="my-hash">—</div></div>
     </section>
+
     <section class="hero-grid">
       <div class="card"><div class="card-label">POOL DIFF</div><div class="card-value" id="pool-diff">—</div></div>
       <div class="card"><div class="card-label">ACCEPTED</div><div class="card-value" id="shares-accepted">0</div></div>
       <div class="card"><div class="card-label">REJECTED</div><div class="card-value" id="shares-rejected">0</div></div>
       <div class="card"><div class="card-label">REJECT RATE</div><div class="card-value" id="reject-rate">0%</div></div>
     </section>
-    <section class="card">
-      <div class="card-header">HOLDING BALANCE</div>
-      <div id="bal-total" class="card-value">0</div>
-      <div class="holding-addr" id="holding-addr">generating…</div>
+
+    <section class="hero-grid">
+      <div class="card balance-card">
+        <div class="card-label">UNCONFIRMED BALANCE</div>
+        <div class="card-value" id="bal-unconfirmed">0.00000000</div>
+        <div class="subline">found blocks · waiting for 100 confirmations</div>
+      </div>
+      <div class="card balance-card">
+        <div class="card-label">CONFIRMED BALANCE</div>
+        <div class="card-value" id="bal-confirmed">0.00000000</div>
+        <div class="subline">mature BCH2 rewards</div>
+      </div>
+      <div class="card balance-card">
+        <div class="card-label">TOTAL MINING BALANCE</div>
+        <div class="card-value" id="bal-total">0.00000000</div>
+        <div class="subline" id="maturity-label">Coinbase maturity: 100 blocks</div>
+      </div>
+      <div class="card balance-card">
+        <div class="card-label">HOLDING ADDRESS</div>
+        <div class="holding-addr" id="holding-addr">generating…</div>
+      </div>
     </section>
+
+    <section class="card">
+      <div class="card-header">LIVE COMPETITION</div>
+      <div class="competition-grid">
+        <div>
+          <div class="metric-label">YOUR SHARE OF NETWORK</div>
+          <div class="competition-value" id="competition-pct">—</div>
+        </div>
+        <div>
+          <div class="metric-label">NETWORK SHARE</div>
+          <div class="competition-value" id="competition-ppm">—</div>
+        </div>
+        <div>
+          <div class="metric-label">5M HASHRATE</div>
+          <div class="competition-value" id="competition-hash">—</div>
+        </div>
+      </div>
+      <div class="progress-bar competition-bar"><div class="progress-fill" id="competition-bar"></div></div>
+      <div class="competition-caption" id="competition-caption">Waiting for live network hashrate…</div>
+    </section>
+
     <section class="card">
       <div class="card-header">BLOCK ROUND</div>
       <div class="round-timer" id="round-timer">00:00</div>
       <div class="progress-bar"><div class="progress-fill" id="round-bar"></div></div>
-      <div style="font-size:.75rem;margin-top:6px;opacity:.7">Zeit bis ~10-Min-Runde</div>
-      <div style="margin-top:12px">Best share: <span id="best-share">—</span>
-        <span style="opacity:.6">(ever <span id="best-share-ever">—</span>)</span></div>
-      <div style="margin-top:14px;font-size:.7rem;letter-spacing:.1em;opacity:.8">BEST SHARE → NETWORK DIFF</div>
-      <div class="progress-bar" style="margin-top:6px"><div class="progress-fill" id="near-block-bar"></div></div>
-      <div id="near-block-pct" style="font-size:.75rem;margin-top:6px;font-family:Share Tech Mono,monospace;opacity:.85">—</div>
+      <div class="subline center">BCH2 target round ≈ 10 minutes</div>
+      <div class="best-share-row">Best share: <span id="best-share">—</span> <span class="muted">(ever <span id="best-share-ever">—</span>)</span></div>
+      <div class="subline block-target-title">BEST SHARE → CURRENT BLOCK TARGET</div>
+      <div class="progress-bar block-progress"><div class="progress-fill" id="near-block-bar"></div></div>
+      <div id="near-block-pct" class="mono-value">—</div>
     </section>
+
+    <section class="card">
+      <div class="card-header">DIFFICULTY HISTORY</div>
+      <div class="difficulty-meta"><span>Current <strong id="difficulty-current">—</strong></span><span id="difficulty-range">—</span></div>
+      <svg id="difficulty-chart" class="difficulty-chart" viewBox="0 0 900 220" role="img" aria-label="BCH2 network difficulty history"></svg>
+    </section>
+
+    <section class="card">
+      <div class="card-header">BLOCK PARTS // LIVE JOB</div>
+      <div class="block-parts" id="block-parts">
+        <div class="part waiting">WAITING…</div>
+      </div>
+    </section>
+
     <section class="card">
       <div class="card-header">WORKERS</div>
       <div id="workers-list" class="log-feed">No workers connected.</div>
     </section>
+
     <section class="card">
       <div class="card-header">BLOCKS FOUND</div>
       <div id="blocks-found" class="log-feed">No blocks found.</div>
     </section>
-    <section class="card">
-      <div class="card-header">BLOCK PARTS</div>
-      <div class="block-parts" id="block-parts">WAITING…</div>
-    </section>
+
     <section class="card">
       <div class="card-header">LIVE STRATUM LOG</div>
       <div id="log-feed" class="log-feed"></div>
     </section>
   </main>
+
   <footer class="footer">BCH2 JARVIS | <span id="last-update">—</span></footer>
   <script src="app.js"></script>
 </body>
