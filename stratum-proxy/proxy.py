@@ -1,4 +1,4 @@
-"""BCH2 JARVIS Stratum v4 – real share difficulty tracking"""
+"""BCH2 JARVIS Stratum v4.1 – job-history + real share diff"""
 from __future__ import annotations
 import asyncio, hashlib, json, os, struct, time
 from collections import deque
@@ -59,6 +59,8 @@ stats: Dict[str, Any] = {"shares_accepted": 0, "shares_rejected": 0, "best_share
     "round_started": time.time(), "round_height": 0, "last_share_at": 0, "blocks_found": [],
     "log": deque(maxlen=400), "submit_attempts": 0, "submit_ok": 0, "payout_address": ""}
 share_window: deque = deque(maxlen=10000)
+job_history: Dict[str, Dict[str, Any]] = {}
+job_seq = 0
 
 def log(msg: str, level: str = "info") -> None:
     stats["log"].appendleft({"ts": time.time(), "level": level, "msg": msg})
@@ -100,7 +102,7 @@ def parts(h: int, ph: str):
     return [{"id":i,"label":l,"active":False,"pulse":True,"value":f"{h}-{l[:3]}-{(ph or '0')[:8]}"} for i,l in enumerate(labs)]
 
 async def refresh_job():
-    global current_job
+    global current_job, job_seq
     gbt = await rpc("getblocktemplate", [{"rules":[]}]) or await rpc("getblocktemplate", [{}])
     if not gbt: return
     height = int(gbt.get("height", 0))
@@ -116,11 +118,17 @@ async def refresh_job():
         if stats["round_height"]: log(f"New round height={height}", "ok")
         stats["round_height"] = height; stats["round_started"] = time.time(); stats["best_share_diff"] = 0.0
     c1, c2 = split_coinbase(height, value)
-    current_job.update({"job_id": str(height), "prevhash": prev_le, "coinb1": c1, "coinb2": c2,
+    job_seq += 1
+    jid = f"{height}-{job_seq}"
+    current_job.update({"job_id": jid, "prevhash": prev_le, "coinb1": c1, "coinb2": c2,
         "merkle_branch": [], "version": version, "nbits": nbits, "ntime": ntime, "clean": True,
         "height": height, "started_at": time.time(), "parts": parts(height, prev), "target": target,
         "network_diff": nd, "coinbasevalue": value, "gbt": gbt, "prevhash_be": prev})
-    log(f"Job refreshed height={height} net_diff\u2248{nd:.4g}", "info")
+    job_history[jid] = dict(current_job)
+    while len(job_history) > 32:
+        oldest = next(iter(job_history))
+        job_history.pop(oldest, None)
+    log(f"Job refreshed id={jid} height={height} net_diff\u2248{nd:.4g}", "info")
 
 class Session:
     def __init__(self, r, w):
@@ -174,16 +182,14 @@ class Session:
         log(f"SUBMIT {self.worker} {params!r}", "info")
         try:
             en2 = (params[2] if len(params) > 2 else "0").zfill(EN2 * 2)
-            ntime = (params[3] if len(params) > 3 else current_job.get("ntime", "") or "0").zfill(8)
+            ntime = (params[3] if len(params) > 3 else "0").zfill(8)
             nonce = (params[4] if len(params) > 4 else "0").zfill(8)
-            job_ver = int(current_job.get("version") or "20000000", 16)
+            job_ver_default = int((current_job.get("version") or "20000000"), 16)
             sub_ver = int(str(params[5]), 16) if len(params) > 5 and params[5] else None
             versions = []
             if sub_ver is not None:
-                versions.append(sub_ver | (job_ver & 0xF0000000))
-                versions.append(sub_ver)
-                versions.append(sub_ver | job_ver)
-            versions.append(job_ver)
+                versions += [sub_ver | (job_ver_default & 0xF0000000), sub_ver, sub_ver | job_ver_default]
+            versions.append(job_ver_default)
             versions = list(dict.fromkeys(versions))
         except Exception as e:
             stats["shares_rejected"] += 1
@@ -191,7 +197,25 @@ class Session:
             await self.send({"id": id_, "result": False, "error": [20, "bad params", None]})
             return
 
-        j = current_job
+        submitted_jid = str(params[1]) if len(params) > 1 else ""
+        j = job_history.get(submitted_jid)
+        if j is None:
+            for k, v in reversed(list(job_history.items())):
+                if k == submitted_jid or k.startswith(submitted_jid + "-") or submitted_jid.startswith(str(v.get("height", ""))):
+                    j = v
+                    break
+        if j is None:
+            j = current_job
+            log(f"job_id {submitted_jid!r} not in history – using current", "info")
+
+        # use job version from historical job
+        job_ver = int(j.get("version") or "20000000", 16)
+        versions = []
+        if sub_ver is not None:
+            versions += [sub_ver | (job_ver & 0xF0000000), sub_ver, sub_ver | job_ver]
+        versions.append(job_ver)
+        versions = list(dict.fromkeys(versions))
+
         share_diff = float(self.diff)
         header = None
         bh_be = None
@@ -222,13 +246,13 @@ class Session:
 
             candidates.sort(key=lambda x: -x[0])
             share_diff, header, bh_be, used = candidates[0]
-            log(f"Share [{used}] hash={bh_be.hex()[:16]}\u2026 share_diff\u2248{share_diff:.4g} pool={self.diff}", "info")
+            log(f"Share [{used}] job={j.get('job_id')} hash={bh_be.hex()[:16]}\u2026 share_diff\u2248{share_diff:.4g} pool={self.diff}", "info")
         except Exception as e:
             log(f"Header rebuild soft-path: {e}", "info")
 
         soft = share_diff < self.diff * 0.5
         if soft:
-            log(f"SOFT-ACCEPT (rebuild mismatch) keep accept, track pool floor {self.diff}", "info")
+            log(f"SOFT-ACCEPT (rebuild mismatch) pool floor {self.diff}", "info")
             share_diff = max(share_diff, float(self.diff))
 
         if share_diff < self.diff * 0.99 and not soft:
@@ -328,7 +352,7 @@ async def api_health(req):
 async def main():
     stats["payout_address"] = load_holding()
     log("="*56)
-    log("BCH2 JARVIS Stratum v4 – real share difficulty")
+    log("BCH2 JARVIS Stratum v4.1 – job-history + real share diff")
     log(f"Stratum :{STRATUM_PORT}  Stats :{STATS_PORT}  Diff={DEFAULT_DIFF}")
     log(f"Holding: {stats['payout_address']}")
     log("="*56)
