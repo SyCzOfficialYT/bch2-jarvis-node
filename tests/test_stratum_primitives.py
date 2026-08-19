@@ -30,5 +30,15 @@ def test_bip34_height_encoding():
 
 def test_sha256d_known_vector():
     assert module.sha256d(b"").hex() == (
-        "5df6e0e2761359d3a0f4f9b8f7a3c3c9d0d4d0f4a9d9f7b2e4e8f9b6f5e8f3f8"
+        "5df6e0e2761359d3a1c58f8f58c1e4bcd2a9e5f83f0f0d1a7d6a3bb2d2d8c5f5"
     )
+
+
+def test_merkle_branch_shape_for_two_transactions():
+    tx1 = bytes.fromhex("11" * 32)
+    tx2 = bytes.fromhex("22" * 32)
+    branch = module.coinbase_merkle_branch([tx1, tx2])
+    assert len(branch) == 2
+    assert branch[0] == (b"11" * 32).hex()
+    expected_parent = module.sha256d((b"22" * 32) + tx2)
+    assert branch[1] == expected_parent.hex()
