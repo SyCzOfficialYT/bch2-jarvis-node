@@ -29,6 +29,7 @@ START_DIFF = float(ENV("START_DIFF", "8192"))
 MAX_JOB_HISTORY = int(ENV("MAX_JOB_HISTORY", "64"))
 SHARE_RETENTION = int(ENV("SHARE_RETENTION", "20000"))
 JOB_REFRESH_SECONDS = float(ENV("JOB_REFRESH_SECONDS", "5"))
+BLOCK_MATURITY = int(ENV("BLOCK_MATURITY", "100"))
 POOL_TAG = ENV("POOL_TAG", "/BCH2-JARVIS/").encode()
 HOLDING_FILE = Path("/holding/holding_address.txt")
 SHARES_DIR = Path("/shares")
@@ -43,6 +44,8 @@ if not RPC_PASSWORD:
     raise RuntimeError("RPC_PASSWORD is not configured")
 if START_DIFF <= 0:
     raise RuntimeError("START_DIFF must be > 0")
+if BLOCK_MATURITY <= 0:
+    raise RuntimeError("BLOCK_MATURITY must be > 0")
 if len(POOL_TAG) > 64:
     raise RuntimeError("POOL_TAG is unreasonably long")
 
@@ -171,6 +174,17 @@ job_sequence = 0
 
 def save_block_history() -> None:
     BLOCKS_LOG.write_text(json.dumps(stats["blocks_found"][:200], indent=2), encoding="utf-8")
+
+
+def load_block_history() -> None:
+    if not BLOCKS_LOG.exists():
+        return
+    try:
+        raw = json.loads(BLOCKS_LOG.read_text(encoding="utf-8"))
+        if isinstance(raw, list):
+            stats["blocks_found"] = raw[:200]
+    except Exception as exc:
+        print(f"[WARN] Unable to load block history: {exc}", flush=True)
 
 
 def hashrate(window_seconds: float) -> float:
@@ -470,9 +484,9 @@ class Session:
         await self.send({"id": request_id, "result": True, "error": None})
         log(f"ACCEPT share worker={self.worker} job={submitted_job_id} share_diff≈{share_diff:.8g}{' BLOCK' if is_block else ''}", "ok")
         if is_block:
-            await self.submit_block(j, header, extranonce2, hash_be)
+            await self.submit_block(j, header, extranonce2, hash_be, share_diff)
 
-    async def submit_block(self, j: dict[str, Any], header: bytes, extranonce2: str, hash_be: bytes) -> None:
+    async def submit_block(self, j: dict[str, Any], header: bytes, extranonce2: str, hash_be: bytes, share_diff: float) -> None:
         try:
             coinbase = bytes.fromhex(j["coinb1"] + self.extra1 + extranonce2 + j["coinb2"])
             transactions = [coinbase.hex()]
@@ -486,10 +500,26 @@ class Session:
             accepted = result in (None, "")
             if accepted:
                 stats["submit_ok"] += 1
-            record = {"height": j["height"], "hash": hash_be.hex(), "worker": self.worker, "share_diff": max(stats["best_share_diff"], 0.0), "reward": j["coinbasevalue"] / 100_000_000, "time": time.time(), "status": "accepted" if accepted else str(result)}
-            stats["blocks_found"].insert(0, record)
-            save_block_history()
-            log(f"submitblock result={result!r}", "ok" if accepted else "warn")
+            record = {
+                "height": j["height"],
+                "hash": hash_be.hex(),
+                "worker": self.worker,
+                "share_diff": share_diff,
+                "network_diff": j["network_diff"],
+                "reward": j["coinbasevalue"] / 100_000_000,
+                "time": time.time(),
+                "status": "unconfirmed" if accepted else "rejected",
+                "confirmations": 0,
+                "maturity": 0,
+                "maturity_blocks": BLOCK_MATURITY,
+                "maturity_height": j["height"] + BLOCK_MATURITY - 1,
+                "block_candidate": True,
+            }
+            if accepted:
+                stats["blocks_found"].insert(0, record)
+                stats["blocks_found"] = stats["blocks_found"][:200]
+                save_block_history()
+            log(f"submitblock result={result!r} block={'accepted' if accepted else 'rejected'}", "ok" if accepted else "warn")
         except Exception as exc:
             log(f"BLOCK SUBMIT FAILED: {exc}", "warn")
 
@@ -515,6 +545,40 @@ class Session:
             with contextlib.suppress(Exception):
                 await self.writer.wait_closed()
             log(f"Miner disconnected {self.peer}")
+
+
+def update_block_states(chain_height: int | None) -> None:
+    if chain_height is None:
+        return
+    changed = False
+    for block in stats["blocks_found"]:
+        if block.get("status") in {"rejected", "orphaned"}:
+            continue
+        height = int(block.get("height", 0))
+        confirmations = max(0, chain_height - height + 1)
+        maturity = min(BLOCK_MATURITY, confirmations)
+        status = "confirmed" if confirmations >= BLOCK_MATURITY else "unconfirmed"
+        if block.get("confirmations") != confirmations or block.get("maturity") != maturity or block.get("status") != status:
+            block["confirmations"] = confirmations
+            block["maturity"] = maturity
+            block["status"] = status
+            block["maturity_blocks"] = BLOCK_MATURITY
+            block["maturity_height"] = height + BLOCK_MATURITY - 1
+            changed = True
+    if changed:
+        save_block_history()
+
+
+def mining_balances() -> dict[str, float]:
+    unconfirmed = 0.0
+    confirmed = 0.0
+    for block in stats["blocks_found"]:
+        reward = float(block.get("reward", 0.0) or 0.0)
+        if block.get("status") == "confirmed":
+            confirmed += reward
+        elif block.get("status") == "unconfirmed":
+            unconfirmed += reward
+    return {"unconfirmed": unconfirmed, "confirmed": confirmed, "total": unconfirmed + confirmed}
 
 
 async def broadcast_job(clean_jobs: bool) -> None:
@@ -543,6 +607,8 @@ async def telemetry_loop() -> None:
     while True:
         stats["hashrate_5m"] = hashrate(300)
         stats["hashrate_1h"] = hashrate(3600)
+        chain_height = await rpc.call("getblockcount")
+        update_block_states(int(chain_height) if chain_height is not None else None)
         await asyncio.sleep(5)
 
 
@@ -552,22 +618,77 @@ async def api_health(_: web.Request) -> web.Response:
 
 async def api_stats(_: web.Request) -> web.Response:
     elapsed = max(0.0, time.time() - stats["round_started"])
+    balances = mining_balances()
+    network_hashrate = 0.0
+    try:
+        mi = await rpc.call("getmininginfo") or {}
+        network_hashrate = float(mi.get("networkhashps") or 0.0)
+    except Exception:
+        pass
+    competition_pct = (stats["hashrate_5m"] / network_hashrate * 100.0) if network_hashrate > 0 else 0.0
+    best_share = float(stats["best_share_diff"] or 0.0)
+    network_diff = float(job.get("network_diff") or 0.0)
+    block_progress_pct = min(100.0, max(0.0, (best_share / network_diff) * 100.0)) if network_diff > 0 else 0.0
     return web.json_response({
         "version": "6.1-production",
         "holding_address": load_holding(),
-        "job": {"height": job.get("height"), "job_id": job.get("job_id"), "nbits": job.get("nbits"), "network_diff": job.get("network_diff"), "network_target": f"{job.get('target', 0):064x}" if job.get("target") else None, "started_at": job.get("created_at")},
-        "round": {"height": stats["round_height"], "started_at": stats["round_started"], "elapsed_sec": elapsed, "target_sec": 600, "progress_pct": min(100.0, elapsed / 600 * 100), "best_share": stats["best_share_diff"], "best_share_ever": stats["best_share_ever"]},
-        "mining": {"share_difficulty": START_DIFF, "shares_accepted": stats["shares_accepted"], "shares_rejected": stats["shares_rejected"], "hashrate_5m": stats["hashrate_5m"], "hashrate_1h": stats["hashrate_1h"], "last_share_at": stats["last_share_at"], "workers": stats["workers"], "submit_attempts": stats["submit_attempts"], "submit_ok": stats["submit_ok"]},
+        "maturity_blocks": BLOCK_MATURITY,
+        "balances": balances,
+        "competition": {
+            "your_hashrate": stats["hashrate_5m"],
+            "network_hashrate": network_hashrate,
+            "your_network_pct": competition_pct,
+            "network_share_ppm": (stats["hashrate_5m"] / network_hashrate * 1_000_000.0) if network_hashrate > 0 else 0.0,
+        },
+        "job": {
+            "height": job.get("height"),
+            "job_id": job.get("job_id"),
+            "version": job.get("version"),
+            "nbits": job.get("nbits"),
+            "ntime": job.get("ntime"),
+            "prevhash": job.get("prevhash_be"),
+            "merkle_branch": job.get("merkle_branch", []),
+            "coinbasevalue": job.get("coinbasevalue"),
+            "transactions": len(job.get("transactions", []) or []),
+            "network_diff": network_diff,
+            "network_target": f"{job.get('target', 0):064x}" if job.get("target") else None,
+            "started_at": job.get("created_at"),
+        },
+        "round": {
+            "height": stats["round_height"],
+            "started_at": stats["round_started"],
+            "elapsed_sec": elapsed,
+            "target_sec": 600,
+            "progress_pct": min(100.0, elapsed / 600 * 100),
+            "best_share": best_share,
+            "best_share_ever": stats["best_share_ever"],
+            "network_diff": network_diff,
+            "block_progress_pct": block_progress_pct,
+            "remaining_factor": (network_diff / best_share) if best_share > 0 and network_diff > best_share else 1.0,
+        },
+        "mining": {
+            "share_difficulty": START_DIFF,
+            "shares_accepted": stats["shares_accepted"],
+            "shares_rejected": stats["shares_rejected"],
+            "hashrate_5m": stats["hashrate_5m"],
+            "hashrate_1h": stats["hashrate_1h"],
+            "last_share_at": stats["last_share_at"],
+            "workers": stats["workers"],
+            "submit_attempts": stats["submit_attempts"],
+            "submit_ok": stats["submit_ok"],
+        },
         "blocks_found": stats["blocks_found"][:200],
         "log": list(stats["log"])[:100],
     })
 
 
 async def main() -> None:
+    load_block_history()
     log("=" * 64)
     log("BCH2 JARVIS Stratum v6.1 PRODUCTION SOLO")
     log(f"Stratum :{STRATUM_PORT} Stats :{STATS_PORT} ShareDiff={START_DIFF}")
     log(f"Holding: {load_holding()}")
+    log(f"Coinbase maturity: {BLOCK_MATURITY} blocks")
     log("=" * 64)
     if not load_holding():
         raise RuntimeError("Holding address missing; wallet-init must run successfully")
