@@ -16,9 +16,13 @@ concurrency:
 
 jobs:
   python:
-    name: Python 3.12 tests
+    name: Python ${{ matrix.python-version }} tests
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.14"]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -26,7 +30,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: |
             stratum-proxy/requirements.txt
@@ -55,10 +59,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-
-      - name: Install Docker Compose plugin
-        run: |
-          docker compose version
 
       - name: Validate Compose
         run: |
