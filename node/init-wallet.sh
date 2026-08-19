@@ -21,18 +21,32 @@ wait_for_rpc() {
   return 1
 }
 
-create_or_load_wallet() {
-  local wallets
-  wallets=$("${CLI[@]}" listwallets 2>/dev/null || printf '[]')
-  if ! grep -q '"'"${RPC_WALLET}"'"' <<<"$wallets"; then
-    echo "Creating wallet '$RPC_WALLET'..."
-    "${CLI[@]}" createwallet "$RPC_WALLET" >/dev/null
+wallet_is_loaded() {
+  "${CLI[@]}" listwallets 2>/dev/null | grep -Fq '"'"${RPC_WALLET}"'"'
+}
+
+wallet_exists_on_disk() {
+  "${CLI[@]}" listwalletdir 2>/dev/null | grep -Fq '"name": "'"${RPC_WALLET}"'"'
+}
+
+ensure_wallet() {
+  if wallet_is_loaded; then
+    echo "Wallet '$RPC_WALLET' already loaded"
+    return 0
   fi
-  "${CLI[@]}" loadwallet "$RPC_WALLET" >/dev/null 2>&1 || true
+
+  if wallet_exists_on_disk; then
+    echo "Loading existing wallet '$RPC_WALLET'..."
+    "${CLI[@]}" loadwallet "$RPC_WALLET" >/dev/null
+    return 0
+  fi
+
+  echo "Creating wallet '$RPC_WALLET'..."
+  "${CLI[@]}" createwallet "$RPC_WALLET" >/dev/null
 }
 
 wait_for_rpc
-create_or_load_wallet
+ensure_wallet
 
 CLI_W=("${CLI[@]}" "-rpcwallet=$RPC_WALLET")
 mkdir -p "$HOLDING"
