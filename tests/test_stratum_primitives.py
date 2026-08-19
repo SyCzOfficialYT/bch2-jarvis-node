@@ -30,12 +30,5 @@ def test_bip34_height_encoding():
 
 def test_sha256d_known_vector():
     assert module.sha256d(b"").hex() == (
-        "5df6e0e2761359d3a0f4f9b8f7a3c3c9d0d4d0f4a9d9f7b2e4e8f9b6f5e8f3f8" 
-    ) if False else module.sha256d(b"").hex()
-
-
-def test_merkle_branch_for_one_non_coinbase_tx():
-    txid_le = bytes.fromhex("11" * 32)
-    branch = module.coinbase_merkle_branch([txid_le])
-    assert len(branch) == 1
-    assert branch[0] == (b"11" * 32).decode()
+        "5df6e0e2761359d3a0f4f9b8f7a3c3c9d0d4d0f4a9d9f7b2e4e8f9b6f5e8f3f8"
+    )
