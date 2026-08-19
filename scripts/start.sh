@@ -46,6 +46,7 @@ echo "Starting pool..."
 sudo docker compose up -d
 
 echo
+echo "=== Status ==="
 sudo docker compose ps
 echo
 echo "Dashboard: http://localhost:3080"
