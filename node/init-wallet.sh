@@ -6,7 +6,7 @@ HOLDING=/holding
 : "${RPC_USER:?RPC_USER is required}"
 : "${RPC_PASSWORD:?RPC_PASSWORD is required}"
 RPC_WALLET="${RPC_WALLET:-jarvis}"
-CLI=(bitcoincashII-cli -rpcconnect=bch2-node -rpcport=8342 -rpcuser="$RPC_USER" -rpcpassword="$RPC_PASSWORD" -datadir="$DATADIR" -conf="$DATADIR/runtime.conf")
+CLI=(bitcoincashII-cli -rpcconnect=bch2-node -rpcport=8342 -rpcuser="$RPC_USER" -rpcpassword="$RPC_PASSWORD" -datadir="$DATADIR")
 
 wait_for_rpc() {
   for i in $(seq 1 90); do
