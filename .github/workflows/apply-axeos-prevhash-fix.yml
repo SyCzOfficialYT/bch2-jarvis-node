@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - fix/axeos-prevhash-wire-format
+  pull_request:
+    types: [opened, synchronize]
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -14,6 +18,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Patch Stratum prevhash wire format
         shell: bash
@@ -101,8 +107,8 @@ jobs:
               assert module.header_prevhash(wire) == bytes.fromhex(rpc_hash)[::-1]
 
 
-def test_sha256d_known_vector():
-'''
+          def test_sha256d_known_vector():
+          '''
           if marker not in s:
               raise SystemExit("test insertion point not found")
           if "test_axeos_prevhash_wire_format_roundtrip" not in s:
@@ -126,5 +132,9 @@ def test_sha256d_known_vector():
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add stratum-proxy/proxy.py tests/test_stratum_primitives.py
+          if git diff --cached --quiet; then
+            echo "No source changes needed."
+            exit 0
+          fi
           git commit -m "Fix AxeOS Stratum prevhash byte order"
           git push
