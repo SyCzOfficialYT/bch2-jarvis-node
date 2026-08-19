@@ -10,10 +10,11 @@ jobs:
   python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: "pip"
       - name: Install test dependencies
         run: python -m pip install --upgrade pip pytest aiohttp==3.12.15 fastapi==0.115.6 httpx==0.28.1
       - name: Compile Python
@@ -24,7 +25,7 @@ jobs:
   compose:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate compose
         run: |
           cp .env.example .env
