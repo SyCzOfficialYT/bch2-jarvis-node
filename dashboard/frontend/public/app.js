@@ -30,10 +30,10 @@
   function drawDifficulty(history) {
     const svg = $("#difficulty-chart"); if (!svg) return;
     const points = (history || []).map(p => ({ t: Number(p.t), v: Number(p.v) })).filter(p => Number.isFinite(p.v) && p.v > 0);
-    if (points.length < 2) { svg.innerHTML = '<text x="450" y="115" text-anchor="middle" fill="currentColor" opacity=".5" font-family="Share Tech Mono,monospace" font-size="13">Collecting live difficulty samples…</text>'; return; }
+    if (points.length < 2) { svg.innerHTML = '<text x="450" y="115" text-anchor="middle" fill="currentColor" opacity=".5" font-family="JetBrains Mono,monospace" font-size="13">Collecting live difficulty samples…</text>'; return; }
     const W=900,H=220,px=22,py=20,vals=points.map(p=>p.v),min=Math.min(...vals),max=Math.max(...vals),span=Math.max(max-min,max*.05,1),lo=Math.max(0,min-span*.08),hi=max+span*.08;
     const x=i=>px+i/(points.length-1)*(W-px*2), y=v=>H-py-(v-lo)/(hi-lo)*(H-py*2), poly=points.map((p,i)=>`${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
-    svg.innerHTML=`<polyline points="${poly}" fill="none" stroke="currentColor" stroke-width="2.5"/><text x="${px}" y="15" fill="currentColor" opacity=".5" font-family="monospace" font-size="11">${esc(fmtShare(max))}</text><text x="${px}" y="${H-5}" fill="currentColor" opacity=".5" font-family="monospace" font-size="11">${esc(fmtShare(min))}</text>`;
+    svg.innerHTML=`<polyline points="${poly}" fill="none" stroke="currentColor" stroke-width="2.5"/><text x="${px}" y="15" fill="currentColor" opacity=".5" font-family="JetBrains Mono,monospace" font-size="11">${esc(fmtShare(max))}</text><text x="${px}" y="${H-5}" fill="currentColor" opacity=".5" font-family="JetBrains Mono,monospace" font-size="11">${esc(fmtShare(min))}</text>`;
     const r=$("#difficulty-range"),c=$("#difficulty-current"); if(r)r.textContent=`range ${fmtShare(min)} → ${fmtShare(max)} · ${points.length} samples`; if(c)c.textContent=fmtShare(points.at(-1).v);
   }
 
