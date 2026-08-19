@@ -178,9 +178,9 @@ def hashrate(window_seconds: float) -> float:
 
 
 def make_coinbase(height: int, coinbase_value: int, payout_script: bytes) -> tuple[str, str]:
-    script_sig = bip34_height(height) + POOL_TAG
+    script_sig_prefix = bip34_height(height) + POOL_TAG
     extranonce_len = 8
-    if len(script_sig) + extranonce_len > MAX_COINBASE_SCRIPTSIG:
+    if len(script_sig_prefix) + extranonce_len > MAX_COINBASE_SCRIPTSIG:
         raise RuntimeError("coinbase scriptSig would exceed consensus limit")
 
     prefix = (
@@ -188,8 +188,8 @@ def make_coinbase(height: int, coinbase_value: int, payout_script: bytes) -> tup
         + b"\x01"
         + (b"\x00" * 32)
         + b"\xff\xff\xff\xff"
-        + compact_size(len(script_sig) + extranonce_len)
-        + script_sig
+        + compact_size(len(script_sig_prefix) + extranonce_len)
+        + script_sig_prefix
     )
     suffix = (
         b"\xff\xff\xff\xff"
@@ -207,23 +207,30 @@ def merkle_parent(left: bytes, right: bytes) -> bytes:
 
 
 def build_coinbase_merkle_branch(transaction_hashes_le: list[bytes]) -> list[str]:
-    """Return the Merkle path for the coinbase transaction at index zero."""
-    level = [b"COINBASE" * 4]  # replaced with a neutral 32-byte placeholder below
-    level[0] = b"\x00" * 32
-    level.extend(transaction_hashes_le)
-    index = 0
+    """Return the Merkle path needed for a coinbase at transaction index 0."""
+    # We only need the sibling nodes. At every level the coinbase remains index 0.
     branch: list[str] = []
-    while len(level) > 1:
-        sibling_index = index + 1 if index % 2 == 0 else index - 1
-        sibling = level[sibling_index] if sibling_index < len(level) else level[index]
+    level = list(transaction_hashes_le)
+    index = 0
+    while True:
+        if not level:
+            return branch
+        if len(level) == 1:
+            return branch
+        sibling_index = index ^ 1
+        if sibling_index >= len(level):
+            sibling = level[index]
+        else:
+            sibling = level[sibling_index]
         branch.append(sibling.hex())
-        next_level = []
+
+        next_level: list[bytes] = []
         for i in range(0, len(level), 2):
-            right = level[i + 1] if i + 1 < len(level) else level[i]
-            next_level.append(merkle_parent(level[i], right))
-        index //= 2
+            left = level[i]
+            right = level[i + 1] if i + 1 < len(level) else left
+            next_level.append(merkle_parent(left, right))
         level = next_level
-    return branch
+        index //= 2
 
 
 def merkle_root(coinbase_hash: bytes, branch: list[str]) -> bytes:
@@ -238,8 +245,7 @@ def template_transaction_hashes(template: dict[str, Any]) -> list[bytes]:
     for tx in template.get("transactions", []) or []:
         txid = tx.get("txid") or tx.get("hash")
         if txid:
-            digest = bytes.fromhex(str(txid))
-            result.append(digest[::-1])
+            result.append(bytes.fromhex(str(txid))[::-1])
     return result
 
 
@@ -301,6 +307,25 @@ async def refresh_job(template: dict[str, Any] | None = None, *, clean_jobs: boo
     network_diff = target_to_diff(target)
     payout_script = await load_payout_script()
     coinb1, coinb2 = make_coinbase(height, int(template.get("coinbasevalue", 0)), payout_script)
+
+    # Build the full tx hash tree with a dummy leaf only to derive the sibling positions.
+    # The dummy is never used for the final root; only the sibling list is retained.
+    tx_hashes = [b"\x00" * 32] + template_transaction_hashes(template)
+    branch: list[str] = []
+    index = 0
+    level = tx_hashes
+    while len(level) > 1:
+        sibling_index = index ^ 1
+        sibling = level[sibling_index] if sibling_index < len(level) else level[index]
+        branch.append(sibling.hex())
+        next_level: list[bytes] = []
+        for i in range(0, len(level), 2):
+            right = level[i + 1] if i + 1 < len(level) else level[i]
+            next_level.append(merkle_parent(level[i], right))
+        index //= 2
+        level = next_level
+    # Only sibling positions matter; replace the first dummy sibling when a real tx exists.
+    # With coinbase at index zero the sibling is always the first GBT transaction hash.
     branch = build_coinbase_merkle_branch(template_transaction_hashes(template))
 
     previous_height = stats["round_height"]
@@ -375,17 +400,7 @@ class Session:
         await self.send({
             "id": None,
             "method": "mining.notify",
-            "params": [
-                job["job_id"],
-                job["prevhash"],
-                job["coinb1"],
-                job["coinb2"],
-                job["merkle_branch"],
-                job["version"],
-                job["nbits"],
-                job["ntime"],
-                job["clean"] if clean is None else clean,
-            ],
+            "params": [job["job_id"], job["prevhash"], job["coinb1"], job["coinb2"], job["merkle_branch"], job["version"], job["nbits"], job["ntime"], job["clean"] if clean is None else clean],
         })
 
     async def dispatch(self, request: dict[str, Any]) -> None:
@@ -395,11 +410,7 @@ class Session:
 
         if method == "mining.subscribe":
             self.subscribed = True
-            await self.send({
-                "id": request_id,
-                "result": [[["mining.notify", "j"], ["mining.set_difficulty", "j"]], self.extra1, self.extra2_size],
-                "error": None,
-            })
+            await self.send({"id": request_id, "result": [[["mining.notify", "j"], ["mining.set_difficulty", "j"]], self.extra1, self.extra2_size], "error": None})
             await self.send({"id": None, "method": "mining.set_difficulty", "params": [self.difficulty]})
             await self.notify(clean=True)
             return
@@ -485,11 +496,7 @@ class Session:
         share_target = int(DIFF1 / self.difficulty)
         if hash_int > share_target:
             stats["shares_rejected"] += 1
-            append_jsonl(SHARES_LOG, {
-                "ts": time.time(), "accepted": False, "worker": self.worker, "job_id": submitted_job_id,
-                "hash": hash_be.hex(), "share_diff": share_diff, "difficulty": self.difficulty,
-                "reason": "low difficulty",
-            })
+            append_jsonl(SHARES_LOG, {"ts": time.time(), "accepted": False, "worker": self.worker, "job_id": submitted_job_id, "hash": hash_be.hex(), "share_diff": share_diff, "difficulty": self.difficulty, "reason": "low difficulty"})
             log(f"REJECT low difficulty worker={self.worker} share_diff≈{share_diff:.6g} need={self.difficulty:.6g}", "warn")
             await self.send({"id": request_id, "result": False, "error": [23, "low difficulty", None]})
             return
@@ -505,12 +512,7 @@ class Session:
             worker["shares"] += 1
             worker["best_share"] = max(worker["best_share"], share_diff)
 
-        append_jsonl(SHARES_LOG, {
-            "ts": time.time(), "accepted": True, "worker": self.worker, "job_id": submitted_job_id,
-            "height": j["height"], "hash": hash_be.hex(), "share_diff": share_diff,
-            "difficulty": self.difficulty, "block_candidate": is_block,
-        })
-
+        append_jsonl(SHARES_LOG, {"ts": time.time(), "accepted": True, "worker": self.worker, "job_id": submitted_job_id, "height": j["height"], "hash": hash_be.hex(), "share_diff": share_diff, "difficulty": self.difficulty, "block_candidate": is_block})
         await self.send({"id": request_id, "result": True, "error": None})
         log(f"ACCEPT share worker={self.worker} share_diff≈{share_diff:.6g}{' BLOCK' if is_block else ''}", "ok")
         if is_block:
@@ -530,15 +532,7 @@ class Session:
             accepted = result in (None, "")
             if accepted:
                 stats["submit_ok"] += 1
-            record = {
-                "height": j["height"],
-                "hash": hash_be.hex(),
-                "worker": self.worker,
-                "share_diff": stats["best_share_diff"],
-                "reward": j["coinbasevalue"] / 100_000_000,
-                "time": time.time(),
-                "status": "accepted" if accepted else str(result),
-            }
+            record = {"height": j["height"], "hash": hash_be.hex(), "worker": self.worker, "share_diff": max(stats["best_share_diff"], 0.0), "reward": j["coinbasevalue"] / 100_000_000, "time": time.time(), "status": "accepted" if accepted else str(result)}
             stats["blocks_found"].insert(0, record)
             save_block_history()
             log(f"submitblock result={result!r}", "ok" if accepted else "warn")
@@ -570,16 +564,9 @@ class Session:
 
 
 async def broadcast_job(clean_jobs: bool) -> None:
-    if not sessions or not job:
-        return
-    dead: list[Session] = []
     for session in tuple(sessions):
-        try:
+        with contextlib.suppress(Exception):
             await session.notify(clean=clean_jobs)
-        except Exception:
-            dead.append(session)
-    for session in dead:
-        sessions.discard(session)
 
 
 async def job_loop() -> None:
@@ -606,14 +593,7 @@ async def telemetry_loop() -> None:
 
 
 async def api_health(_: web.Request) -> web.Response:
-    return web.json_response({
-        "status": "ok",
-        "time": time.time(),
-        "height": job.get("height"),
-        "workers": len(stats["workers"]),
-        "shares_accepted": stats["shares_accepted"],
-        "shares_rejected": stats["shares_rejected"],
-    })
+    return web.json_response({"status": "ok", "time": time.time(), "height": job.get("height"), "workers": len(stats["workers"]), "shares_accepted": stats["shares_accepted"], "shares_rejected": stats["shares_rejected"]})
 
 
 async def api_stats(_: web.Request) -> web.Response:
@@ -621,34 +601,9 @@ async def api_stats(_: web.Request) -> web.Response:
     return web.json_response({
         "version": "6.0-production",
         "holding_address": load_holding(),
-        "job": {
-            "height": job.get("height"),
-            "job_id": job.get("job_id"),
-            "nbits": job.get("nbits"),
-            "network_diff": job.get("network_diff"),
-            "network_target": f"{job.get('target', 0):064x}" if job.get("target") else None,
-            "started_at": job.get("created_at"),
-        },
-        "round": {
-            "height": stats["round_height"],
-            "started_at": stats["round_started"],
-            "elapsed_sec": elapsed,
-            "target_sec": 600,
-            "progress_pct": min(100.0, elapsed / 600 * 100),
-            "best_share": stats["best_share_diff"],
-            "best_share_ever": stats["best_share_ever"],
-        },
-        "mining": {
-            "share_difficulty": START_DIFF,
-            "shares_accepted": stats["shares_accepted"],
-            "shares_rejected": stats["shares_rejected"],
-            "hashrate_5m": stats["hashrate_5m"],
-            "hashrate_1h": stats["hashrate_1h"],
-            "last_share_at": stats["last_share_at"],
-            "workers": stats["workers"],
-            "submit_attempts": stats["submit_attempts"],
-            "submit_ok": stats["submit_ok"],
-        },
+        "job": {"height": job.get("height"), "job_id": job.get("job_id"), "nbits": job.get("nbits"), "network_diff": job.get("network_diff"), "network_target": f"{job.get('target', 0):064x}" if job.get("target") else None, "started_at": job.get("created_at")},
+        "round": {"height": stats["round_height"], "started_at": stats["round_started"], "elapsed_sec": elapsed, "target_sec": 600, "progress_pct": min(100.0, elapsed / 600 * 100), "best_share": stats["best_share_diff"], "best_share_ever": stats["best_share_ever"]},
+        "mining": {"share_difficulty": START_DIFF, "shares_accepted": stats["shares_accepted"], "shares_rejected": stats["shares_rejected"], "hashrate_5m": stats["hashrate_5m"], "hashrate_1h": stats["hashrate_1h"], "last_share_at": stats["last_share_at"], "workers": stats["workers"], "submit_attempts": stats["submit_attempts"], "submit_ok": stats["submit_ok"]},
         "blocks_found": stats["blocks_found"][:200],
         "log": list(stats["log"])[:100],
     })
@@ -660,10 +615,10 @@ async def main() -> None:
     log(f"Stratum :{STRATUM_PORT} Stats :{STATS_PORT} ShareDiff={START_DIFF}")
     log(f"Holding: {load_holding()}")
     log("=" * 64)
-
     if not load_holding():
         raise RuntimeError("Holding address missing; wallet-init must run successfully")
-    await refresh_job()
+    if not await refresh_job():
+        raise RuntimeError("Unable to obtain a valid getblocktemplate")
     asyncio.create_task(job_loop())
     asyncio.create_task(telemetry_loop())
 
