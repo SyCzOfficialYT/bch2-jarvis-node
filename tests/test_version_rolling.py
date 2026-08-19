@@ -1,4 +1,9 @@
-from stratum_proxy_version_rolling import DEFAULT_VERSION_MASK, negotiate_mask, resolve_version
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "stratum-proxy"))
+
+from version_rolling import DEFAULT_VERSION_MASK, negotiate_mask, resolve_version
 
 
 def test_negotiate_mask_intersects_miner_and_server_masks():
