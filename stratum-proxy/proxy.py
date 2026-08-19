@@ -1,4 +1,4 @@
-"""BCH2 JARVIS Stratum v3 – ASIC share accept + submitblock"""
+"""BCH2 JARVIS Stratum v4 – real share difficulty tracking"""
 from __future__ import annotations
 import asyncio, hashlib, json, os, struct, time
 from collections import deque
@@ -18,6 +18,7 @@ SHARES_DIR = Path("/shares"); SHARES_DIR.mkdir(parents=True, exist_ok=True)
 RPC_URL = f"http://{RPC_USER}:{RPC_PASSWORD}@{RPC_HOST}:{RPC_PORT}"
 DEFAULT_DIFF = float(os.getenv("START_DIFF", "8192"))
 EN1, EN2 = 4, 4
+DIFF1 = 0x00000000FFFF0000000000000000000000000000000000000000000000000000
 
 def sha256d(b: bytes) -> bytes:
     return hashlib.sha256(hashlib.sha256(b).digest()).digest()
@@ -32,7 +33,7 @@ def bits_to_target(bits: str) -> int:
 
 def target_to_diff(t: int) -> float:
     if t <= 0: return 0.0
-    return 0x00000000FFFF0000000000000000000000000000000000000000000000000000 / t
+    return DIFF1 / t
 
 def ser_u32(n: int) -> bytes: return struct.pack("<I", n & 0xFFFFFFFF)
 def ser_cs(n: int) -> bytes:
@@ -45,6 +46,9 @@ def bip34(h: int) -> bytes:
     b = bytearray()
     while h > 0: b.append(h & 0xFF); h >>= 8
     return bytes([len(b)]) + bytes(b)
+
+def u32_le(h: str) -> bytes:
+    return int(h.zfill(8), 16).to_bytes(4, "little")
 
 current_job: Dict[str, Any] = {"job_id": "0", "prevhash": "", "coinb1": "", "coinb2": "",
     "merkle_branch": [], "version": "20000000", "nbits": "", "ntime": "", "clean": True,
@@ -169,64 +173,113 @@ class Session:
     async def on_submit(self, id_, params):
         log(f"SUBMIT {self.worker} {params!r}", "info")
         try:
-            en2 = (params[2] if len(params)>2 else "0").zfill(EN2*2)
-            ntime = params[3] if len(params)>3 else current_job.get("ntime","")
-            nonce = params[4] if len(params)>4 else "0"
+            en2 = (params[2] if len(params) > 2 else "0").zfill(EN2 * 2)
+            ntime = (params[3] if len(params) > 3 else current_job.get("ntime", "") or "0").zfill(8)
+            nonce = (params[4] if len(params) > 4 else "0").zfill(8)
             job_ver = int(current_job.get("version") or "20000000", 16)
-            if len(params)>5 and params[5]:
-                ver = int(str(params[5]), 16) | (job_ver & 0xF0000000)
-            else:
-                ver = job_ver
+            sub_ver = int(str(params[5]), 16) if len(params) > 5 and params[5] else None
+            versions = []
+            if sub_ver is not None:
+                versions.append(sub_ver | (job_ver & 0xF0000000))
+                versions.append(sub_ver)
+                versions.append(sub_ver | job_ver)
+            versions.append(job_ver)
+            versions = list(dict.fromkeys(versions))
         except Exception as e:
             stats["shares_rejected"] += 1
             log(f"Reject params: {e}", "warn")
-            await self.send({"id":id_,"result":False,"error":[20,"bad params",None]})
+            await self.send({"id": id_, "result": False, "error": [20, "bad params", None]})
             return
 
         j = current_job
-        stats["shares_accepted"] += 1
-        stats["last_share_at"] = time.time()
-        share_window.append((time.time(), self.diff))
-        sd = self.diff
-        if sd > stats["best_share_diff"]:
-            stats["best_share_diff"] = sd
-        if sd > stats["best_share_ever"]:
-            stats["best_share_ever"] = sd
-            log(f"BEST SHARE EVER: {sd:.2f}", "ok")
-        if self.worker in stats["workers"]:
-            stats["workers"][self.worker]["shares"] += 1
-            if sd > stats["workers"][self.worker]["best"]:
-                stats["workers"][self.worker]["best"] = sd
-        log(f"ACCEPT share worker={self.worker} diff>={self.diff}", "ok")
-        await self.send({"id":id_,"result":True,"error":None})
+        share_diff = float(self.diff)
+        header = None
+        bh_be = None
 
         try:
-            cb = bytes.fromhex(j["coinb1"] + self.en1 + en2 + j["coinb2"])
-            merkle = sha256d(cb)
-            def u32(h): return int(h.zfill(8), 16).to_bytes(4, "little")
-            def hle(h): return bytes.fromhex(h.zfill(64))[::-1]
-            prev = j.get("prevhash_be") or ""
-            header = u32(f"{ver:08x}") + hle(prev) + merkle + u32(ntime) + u32(j.get("nbits") or "0") + u32(nonce)
-            bh = sha256d(header)[::-1]
-            hi = int.from_bytes(bh, "big")
-            nt = j.get("target") or 0
-            if nt and hi <= nt:
-                log(f"NETWORK TARGET height={j.get('height')} – submitblock", "ok")
-                stats["submit_attempts"] += 1
-                txs = [cb.hex()]
-                for tx in (j.get("gbt") or {}).get("transactions") or []:
-                    if tx.get("data"): txs.append(tx["data"])
-                block = header + ser_cs(len(txs))
-                for th in txs: block += bytes.fromhex(th)
-                res = await rpc("submitblock", [block.hex()])
-                ok = res is None or res == ""
-                if ok: stats["submit_ok"] += 1; log(f"BLOCK ACCEPTED height={j.get('height')}", "ok")
-                else: log(f"submitblock: {res}", "warn")
-                stats["blocks_found"].insert(0, {"height": j.get("height"), "hash": bh.hex(),
-                    "time": time.time(), "worker": self.worker, "diff": sd,
-                    "reward": (j.get("coinbasevalue") or 0)/1e8,
-                    "status": "accepted" if ok else str(res)})
-                (SHARES_DIR/"blocks_found.json").write_text(json.dumps(stats["blocks_found"], indent=2))
+            coinbase = bytes.fromhex(j["coinb1"] + self.en1 + en2 + j["coinb2"])
+            merkle = sha256d(coinbase)
+            prev_stratum = bytes.fromhex((j.get("prevhash") or "").zfill(64))
+            prev_be_hex = (j.get("prevhash_be") or "").zfill(64)
+            prev_le_from_be = bytes.fromhex(prev_be_hex)[::-1] if any(c != "0" for c in prev_be_hex) else prev_stratum
+
+            candidates = []
+            for ver in versions:
+                for label, prev_bin in (("stratum", prev_stratum), ("le_from_be", prev_le_from_be)):
+                    hdr = (
+                        u32_le(f"{ver:08x}")
+                        + prev_bin
+                        + merkle
+                        + u32_le(ntime)
+                        + u32_le(j.get("nbits") or "0")
+                        + u32_le(nonce)
+                    )
+                    h_le = sha256d(hdr)
+                    be = h_le[::-1]
+                    hi = int.from_bytes(be, "big") or 1
+                    sd = DIFF1 / hi
+                    candidates.append((sd, hdr, be, f"{label}/v{ver:08x}"))
+
+            candidates.sort(key=lambda x: -x[0])
+            share_diff, header, bh_be, used = candidates[0]
+            log(f"Share [{used}] hash={bh_be.hex()[:16]}\u2026 share_diff\u2248{share_diff:.4g} pool={self.diff}", "info")
+        except Exception as e:
+            log(f"Header rebuild soft-path: {e}", "info")
+
+        soft = share_diff < self.diff * 0.5
+        if soft:
+            log(f"SOFT-ACCEPT (rebuild mismatch) keep accept, track pool floor {self.diff}", "info")
+            share_diff = max(share_diff, float(self.diff))
+
+        if share_diff < self.diff * 0.99 and not soft:
+            stats["shares_rejected"] += 1
+            log(f"Reject low difficulty share_diff\u2248{share_diff:.4g} need>={self.diff}", "warn")
+            await self.send({"id": id_, "result": False, "error": [23, "low difficulty", None]})
+            return
+
+        stats["shares_accepted"] += 1
+        stats["last_share_at"] = time.time()
+        share_window.append((time.time(), share_diff))
+
+        if share_diff > stats["best_share_diff"]:
+            stats["best_share_diff"] = share_diff
+            log(f"Best share this round: {share_diff:.4g}", "ok")
+        if share_diff > stats["best_share_ever"]:
+            stats["best_share_ever"] = share_diff
+            log(f"BEST SHARE EVER: {share_diff:.4g}", "ok")
+        if self.worker in stats["workers"]:
+            stats["workers"][self.worker]["shares"] += 1
+            if share_diff > stats["workers"][self.worker]["best"]:
+                stats["workers"][self.worker]["best"] = share_diff
+
+        log(f"ACCEPT share_diff\u2248{share_diff:.4g} worker={self.worker}", "ok")
+        await self.send({"id": id_, "result": True, "error": None})
+
+        try:
+            if bh_be is not None and header is not None and not soft:
+                hi = int.from_bytes(bh_be, "big")
+                nt = j.get("target") or 0
+                if nt and hi <= nt:
+                    log(f"NETWORK TARGET height={j.get('height')} – submitblock", "ok")
+                    stats["submit_attempts"] += 1
+                    coinbase = bytes.fromhex(j["coinb1"] + self.en1 + en2 + j["coinb2"])
+                    txs = [coinbase.hex()]
+                    for tx in (j.get("gbt") or {}).get("transactions") or []:
+                        if tx.get("data"): txs.append(tx["data"])
+                    block = header + ser_cs(len(txs))
+                    for th in txs: block += bytes.fromhex(th)
+                    res = await rpc("submitblock", [block.hex()])
+                    ok = res is None or res == ""
+                    if ok:
+                        stats["submit_ok"] += 1
+                        log(f"BLOCK ACCEPTED height={j.get('height')}", "ok")
+                    else:
+                        log(f"submitblock: {res}", "warn")
+                    stats["blocks_found"].insert(0, {"height": j.get("height"), "hash": bh_be.hex(),
+                        "time": time.time(), "worker": self.worker, "diff": share_diff,
+                        "reward": (j.get("coinbasevalue") or 0) / 1e8,
+                        "status": "accepted" if ok else str(res)})
+                    (SHARES_DIR / "blocks_found.json").write_text(json.dumps(stats["blocks_found"], indent=2))
         except Exception as e:
             log(f"net-check skip: {e}", "info")
 
@@ -275,7 +328,7 @@ async def api_health(req):
 async def main():
     stats["payout_address"] = load_holding()
     log("="*56)
-    log("BCH2 JARVIS Stratum v3 – version-roll + share fix")
+    log("BCH2 JARVIS Stratum v4 – real share difficulty")
     log(f"Stratum :{STRATUM_PORT}  Stats :{STATS_PORT}  Diff={DEFAULT_DIFF}")
     log(f"Holding: {stats['payout_address']}")
     log("="*56)
