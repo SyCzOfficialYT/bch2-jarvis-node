@@ -1,32 +1,43 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Ensure data dir exists and has correct permissions (in case volume is mounted as root)
-if [ "$(id -u)" = "0" ]; then
-  chown -R bch2:bch2 /data
+if [[ "$(id -u)" == "0" ]]; then
+  chown -R bch2:bch2 /data /holding
   exec gosu bch2 "$0" "$@"
 fi
 
-# Wait a moment for volume
-mkdir -p /data/.bitcoincashII
+: "${RPC_USER:?RPC_USER is required}"
+: "${RPC_PASSWORD:?RPC_PASSWORD is required}"
 
-# If conf is missing (should be mounted), create a minimal one
-if [ ! -f /data/.bitcoincashII/bitcoincashII.conf ]; then
-  cat > /data/.bitcoincashII/bitcoincashII.conf <<EOF
-# Auto-generated minimal config - override via volume mount
+DATADIR=/data/.bitcoincashII
+RUNTIME_CONF="$DATADIR/runtime.conf"
+mkdir -p "$DATADIR" /holding
+
+cat > "$RUNTIME_CONF" <<EOF
 server=1
-listen=1
 daemon=0
-rpcuser=jarvis
-rpcpassword=xz8A1Grk9NAKk4l2QerGwCmcwtVoGh62
-rpcallowip=0.0.0.0/0
-rpcbind=0.0.0.0
+listen=1
 port=8339
+maxconnections=64
+dnsseed=1
+
+rpcuser=${RPC_USER}
+rpcpassword=${RPC_PASSWORD}
 rpcport=8342
+rpcbind=0.0.0.0
+rpcallowip=172.16.0.0/12
+
+# Pool/node performance
+\dbcache=1024
+maxmempool=400
+mempoolexpiry=72
+
 txindex=1
-dbcache=1024
-maxmempool=500
+blockfilterindex=1
+disablewallet=0
+printtoconsole=1
+logtimestamps=1
 EOF
-fi
+chmod 600 "$RUNTIME_CONF"
 
 exec "$@"
