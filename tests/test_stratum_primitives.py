@@ -85,3 +85,15 @@ def test_version_rolling_mask_accepts_only_masked_bits():
     forbidden = base ^ 0x00000001
     assert ((base ^ allowed) & ~mask) == 0
     assert ((base ^ forbidden) & ~mask) != 0
+
+
+def test_bip310_submit_version_bits_are_resolved_against_job_version():
+    assert module.resolve_version("20000000", "058a6000", module.DEFAULT_VERSION_MASK) == "258a6000"
+    assert module.resolve_version("20000000", "05b4e000", module.DEFAULT_VERSION_MASK) == "25b4e000"
+
+
+def test_share_target_for_higher_difficulty_is_stricter():
+    target_1 = int(module.DIFF1 / 1)
+    target_1000 = int(module.DIFF1 / 1000)
+    assert target_1000 < target_1
+    assert target_1 // target_1000 in (999, 1000, 1001)

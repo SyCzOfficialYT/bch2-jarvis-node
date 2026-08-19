@@ -15,6 +15,8 @@ from typing import Any
 import aiohttp
 from aiohttp import web
 
+from version_rolling import DEFAULT_VERSION_MASK, negotiate_mask, resolve_version
+
 ENV = os.getenv
 RPC_HOST = ENV("RPC_HOST", "bch2-node")
 RPC_PORT = int(ENV("RPC_PORT", "8342"))
@@ -36,7 +38,6 @@ BLOCKS_LOG = SHARES_DIR / "blocks_found.json"
 DIFF1 = 0x00000000FFFF0000000000000000000000000000000000000000000000000000
 EXTRANONCE2_BYTES = 4
 MAX_COINBASE_SCRIPTSIG = 100
-DEFAULT_VERSION_MASK = 0x1FFFE000
 
 if not RPC_PASSWORD:
     raise RuntimeError("RPC_PASSWORD is not configured")
@@ -352,7 +353,7 @@ class Session:
         await self.writer.drain()
 
     async def notify(self, clean: bool | None = None) -> None:
-        if not self.subscribed or not job:
+        if not self.subscribed or not self.authorized or not job:
             return
         await self.send({"id": None, "method": "mining.notify", "params": [job["job_id"], job["prevhash"], job["coinb1"], job["coinb2"], job["merkle_branch"], job["version"], job["nbits"], job["ntime"], job["clean"] if clean is None else clean]})
 
@@ -360,21 +361,6 @@ class Session:
         method = request.get("method")
         request_id = request.get("id")
         params = request.get("params") or []
-        if method == "mining.subscribe":
-            self.subscribed = True
-            await self.send({"id": request_id, "result": [[["mining.notify", "j"], ["mining.set_difficulty", "j"]], self.extra1, self.extra2_size], "error": None})
-            await self.send({"id": None, "method": "mining.set_difficulty", "params": [self.difficulty]})
-            await self.notify(clean=True)
-            return
-        if method == "mining.authorize":
-            self.worker = str(params[0] if params else "worker")[:128]
-            self.authorized = True
-            stats["workers"][self.worker] = {"connected_at": time.time(), "shares": 0, "best_share": 0.0}
-            await self.send({"id": request_id, "result": True, "error": None})
-            await self.send({"id": None, "method": "mining.set_difficulty", "params": [self.difficulty]})
-            await self.notify(clean=False)
-            log(f"Worker authorized: {self.worker}", "ok")
-            return
         if method == "mining.configure":
             requested = params[0] if params else []
             options = params[1] if len(params) > 1 and isinstance(params[1], dict) else {}
@@ -382,10 +368,10 @@ class Session:
             if "version-rolling" in requested:
                 raw_mask = str(options.get("version-rolling.mask", f"{DEFAULT_VERSION_MASK:08x}"))
                 try:
-                    mask = int(raw_mask, 16)
+                    miner_mask = int(raw_mask, 16)
                 except ValueError:
-                    mask = DEFAULT_VERSION_MASK
-                mask &= 0xFFFFFFFF
+                    miner_mask = DEFAULT_VERSION_MASK
+                mask = negotiate_mask(miner_mask, DEFAULT_VERSION_MASK)
                 self.version_rolling_enabled = mask != 0
                 self.version_rolling_mask = mask
                 result["version-rolling"] = self.version_rolling_enabled
@@ -393,12 +379,28 @@ class Session:
                 await self.send({"id": None, "method": "mining.set_version_mask", "params": [f"{mask:08x}"]})
             await self.send({"id": request_id, "result": result, "error": None})
             return
+        if method == "mining.subscribe":
+            self.subscribed = True
+            await self.send({"id": request_id, "result": [[["mining.notify", "j"], ["mining.set_difficulty", "j"]], self.extra1, self.extra2_size], "error": None})
+            await self.send({"id": None, "method": "mining.set_difficulty", "params": [self.difficulty]})
+            return
+        if method == "mining.authorize":
+            self.worker = str(params[0] if params else "worker")[:128]
+            self.authorized = True
+            stats["workers"][self.worker] = {"connected_at": time.time(), "shares": 0, "best_share": 0.0}
+            await self.send({"id": request_id, "result": True, "error": None})
+            await self.send({"id": None, "method": "mining.set_difficulty", "params": [self.difficulty]})
+            await self.notify(clean=True)
+            log(f"Worker authorized: {self.worker}", "ok")
+            return
         if method == "mining.suggest_difficulty":
             try:
                 suggested = float(params[0])
                 if suggested > 0:
                     self.difficulty = suggested
+                    log(f"Miner suggested difficulty={suggested:g}; using pool difficulty={self.difficulty:g}")
                     await self.send({"id": None, "method": "mining.set_difficulty", "params": [self.difficulty]})
+                    await self.notify(clean=False)
             except (ValueError, TypeError, IndexError):
                 pass
             await self.send({"id": request_id, "result": True, "error": None})
@@ -421,7 +423,7 @@ class Session:
         extranonce2 = str(params[2]).strip()
         ntime = str(params[3]).strip()
         nonce = str(params[4]).strip()
-        submitted_version = str(params[5]).strip() if len(params) > 5 and params[5] else None
+        version_bits = str(params[5]).strip() if len(params) > 5 and params[5] else None
         j = jobs.get(submitted_job_id)
         if not j:
             stats["shares_rejected"] += 1
@@ -432,15 +434,13 @@ class Session:
             extranonce2 = _validate_hex(extranonce2, self.extra2_size * 2, "extranonce2")
             ntime = _validate_hex(ntime, 8, "ntime")
             nonce = _validate_hex(nonce, 8, "nonce")
-            version = _validate_hex(submitted_version or j["version"], 8, "version")
-            if submitted_version:
+            if version_bits is not None:
                 if not self.version_rolling_enabled:
                     raise ValueError("version rolling was not negotiated")
-                base_version = int(j["version"], 16)
-                miner_version = int(version, 16)
-                changed_bits = base_version ^ miner_version
-                if changed_bits & ~self.version_rolling_mask:
-                    raise ValueError(f"version rolling outside mask {self.version_rolling_mask:08x}")
+                version_bits = _validate_hex(version_bits, 8, "version_bits")
+                version = resolve_version(j["version"], version_bits, self.version_rolling_mask)
+            else:
+                version = j["version"]
             header, hash_be, hash_int, share_diff = build_header(j, version, ntime, nonce, self.extra1, extranonce2)
         except (KeyError, ValueError, struct.error) as exc:
             stats["shares_rejected"] += 1
@@ -451,8 +451,8 @@ class Session:
         share_target = int(DIFF1 / self.difficulty)
         if hash_int > share_target:
             stats["shares_rejected"] += 1
-            append_jsonl(SHARES_LOG, {"ts": time.time(), "accepted": False, "worker": self.worker, "job_id": submitted_job_id, "height": j["height"], "version": version, "ntime": ntime, "nonce": nonce, "extranonce1": self.extra1, "extranonce2": extranonce2, "hash": hash_be.hex(), "hash_int": hash_int, "share_diff": share_diff, "difficulty": self.difficulty, "share_target": f"{share_target:064x}", "network_target": f"{j['target']:064x}", "reason": "low difficulty"})
-            log(f"REJECT low difficulty worker={self.worker} job={submitted_job_id} height={j['height']} version={version} ntime={ntime} nonce={nonce} share_diff≈{share_diff:.8g} need={self.difficulty:.8g}", "warn")
+            append_jsonl(SHARES_LOG, {"ts": time.time(), "accepted": False, "worker": self.worker, "job_id": submitted_job_id, "height": j["height"], "version_bits": version_bits, "version": version, "ntime": ntime, "nonce": nonce, "extranonce1": self.extra1, "extranonce2": extranonce2, "hash": hash_be.hex(), "hash_int": hash_int, "share_diff": share_diff, "difficulty": self.difficulty, "share_target": f"{share_target:064x}", "network_target": f"{j['target']:064x}", "reason": "low difficulty"})
+            log(f"REJECT low difficulty worker={self.worker} job={submitted_job_id} height={j['height']} version_bits={version_bits or '-'} version={version} ntime={ntime} nonce={nonce} share_diff≈{share_diff:.8g} need={self.difficulty:.8g}", "warn")
             await self.send({"id": request_id, "result": False, "error": [23, "low difficulty", None]})
             return
 
@@ -466,7 +466,7 @@ class Session:
         if worker:
             worker["shares"] += 1
             worker["best_share"] = max(worker["best_share"], share_diff)
-        append_jsonl(SHARES_LOG, {"ts": time.time(), "accepted": True, "worker": self.worker, "job_id": submitted_job_id, "height": j["height"], "version": version, "ntime": ntime, "nonce": nonce, "extranonce1": self.extra1, "extranonce2": extranonce2, "hash": hash_be.hex(), "share_diff": share_diff, "difficulty": self.difficulty, "block_candidate": is_block})
+        append_jsonl(SHARES_LOG, {"ts": time.time(), "accepted": True, "worker": self.worker, "job_id": submitted_job_id, "height": j["height"], "version_bits": version_bits, "version": version, "ntime": ntime, "nonce": nonce, "extranonce1": self.extra1, "extranonce2": extranonce2, "hash": hash_be.hex(), "share_diff": share_diff, "difficulty": self.difficulty, "block_candidate": is_block})
         await self.send({"id": request_id, "result": True, "error": None})
         log(f"ACCEPT share worker={self.worker} job={submitted_job_id} share_diff≈{share_diff:.8g}{' BLOCK' if is_block else ''}", "ok")
         if is_block:
