@@ -33,8 +33,6 @@ SHARES_DIR = Path("/shares")
 SHARES_DIR.mkdir(parents=True, exist_ok=True)
 SHARES_LOG = SHARES_DIR / "shares.jsonl"
 BLOCKS_LOG = SHARES_DIR / "blocks_found.json"
-
-# Bitcoin/BCH difficulty-1 target.
 DIFF1 = 0x00000000FFFF0000000000000000000000000000000000000000000000000000
 EXTRANONCE2_BYTES = 4
 MAX_COINBASE_SCRIPTSIG = 100
@@ -164,7 +162,6 @@ stats: dict[str, Any] = {
 }
 share_window: deque[tuple[float, float]] = deque(maxlen=SHARE_RETENTION)
 sessions: set["Session"] = set()
-
 job: dict[str, Any] = {}
 jobs: dict[str, dict[str, Any]] = {}
 job_sequence = 0
@@ -181,12 +178,11 @@ def hashrate(window_seconds: float) -> float:
 
 
 def make_coinbase(height: int, coinbase_value: int, payout_script: bytes) -> tuple[str, str]:
-    extranonce_len = 8
     script_sig = bip34_height(height) + POOL_TAG
+    extranonce_len = 8
     if len(script_sig) + extranonce_len > MAX_COINBASE_SCRIPTSIG:
         raise RuntimeError("coinbase scriptSig would exceed consensus limit")
 
-    # One input, one payout output, then locktime.
     prefix = (
         u32le(2)
         + b"\x01"
@@ -206,29 +202,26 @@ def make_coinbase(height: int, coinbase_value: int, payout_script: bytes) -> tup
     return prefix.hex(), suffix.hex()
 
 
-def tx_hashes_from_template(template: dict[str, Any]) -> list[bytes]:
-    result: list[bytes] = []
-    for tx in template.get("transactions", []) or []:
-        txid = tx.get("txid") or tx.get("hash")
-        if not txid:
-            continue
-        raw = bytes.fromhex(str(txid))
-        result.append(raw[::-1])
-    return result
+def merkle_parent(left: bytes, right: bytes) -> bytes:
+    return sha256d(left + right)
 
 
-def coinbase_merkle_branch(transaction_hashes_le: list[bytes]) -> list[str]:
-    """Return the Merkle path for coinbase (always index 0)."""
-    level = [b"\x00" * 32] + transaction_hashes_le
+def build_coinbase_merkle_branch(transaction_hashes_le: list[bytes]) -> list[str]:
+    """Return the Merkle path for the coinbase transaction at index zero."""
+    level = [b"COINBASE" * 4]  # replaced with a neutral 32-byte placeholder below
+    level[0] = b"\x00" * 32
+    level.extend(transaction_hashes_le)
+    index = 0
     branch: list[str] = []
     while len(level) > 1:
-        sibling = level[1] if len(level) > 1 else level[0]
+        sibling_index = index + 1 if index % 2 == 0 else index - 1
+        sibling = level[sibling_index] if sibling_index < len(level) else level[index]
         branch.append(sibling.hex())
-        next_level: list[bytes] = []
-        for index in range(0, len(level), 2):
-            left = level[index]
-            right = level[index + 1] if index + 1 < len(level) else left
-            next_level.append(sha256d(left + right))
+        next_level = []
+        for i in range(0, len(level), 2):
+            right = level[i + 1] if i + 1 < len(level) else level[i]
+            next_level.append(merkle_parent(level[i], right))
+        index //= 2
         level = next_level
     return branch
 
@@ -236,8 +229,18 @@ def coinbase_merkle_branch(transaction_hashes_le: list[bytes]) -> list[str]:
 def merkle_root(coinbase_hash: bytes, branch: list[str]) -> bytes:
     root = coinbase_hash
     for branch_hex in branch:
-        root = sha256d(root + bytes.fromhex(branch_hex))
+        root = merkle_parent(root, bytes.fromhex(branch_hex))
     return root
+
+
+def template_transaction_hashes(template: dict[str, Any]) -> list[bytes]:
+    result: list[bytes] = []
+    for tx in template.get("transactions", []) or []:
+        txid = tx.get("txid") or tx.get("hash")
+        if txid:
+            digest = bytes.fromhex(str(txid))
+            result.append(digest[::-1])
+    return result
 
 
 def build_header(
@@ -275,10 +278,7 @@ async def load_payout_script() -> bytes:
     script_hex = info.get("scriptPubKey")
     if not script_hex:
         raise RuntimeError("getaddressinfo returned no scriptPubKey")
-    try:
-        return bytes.fromhex(str(script_hex))
-    except ValueError as exc:
-        raise RuntimeError("Invalid payout scriptPubKey") from exc
+    return bytes.fromhex(str(script_hex))
 
 
 async def refresh_job(template: dict[str, Any] | None = None, *, clean_jobs: bool = True) -> bool:
@@ -301,8 +301,7 @@ async def refresh_job(template: dict[str, Any] | None = None, *, clean_jobs: boo
     network_diff = target_to_diff(target)
     payout_script = await load_payout_script()
     coinb1, coinb2 = make_coinbase(height, int(template.get("coinbasevalue", 0)), payout_script)
-    tx_hashes = tx_hashes_from_template(template)
-    branch = coinbase_merkle_branch(tx_hashes)
+    branch = build_coinbase_merkle_branch(template_transaction_hashes(template))
 
     previous_height = stats["round_height"]
     if previous_height != height:
@@ -338,7 +337,7 @@ async def refresh_job(template: dict[str, Any] | None = None, *, clean_jobs: boo
     jobs[job_id] = dict(new_job)
     while len(jobs) > MAX_JOB_HISTORY:
         jobs.pop(next(iter(jobs)), None)
-    log(f"Job id={job_id} height={height} net_diff≈{network_diff:.6g} txs={len(tx_hashes)}")
+    log(f"Job id={job_id} height={height} net_diff≈{network_diff:.6g} txs={len(template.get('transactions', []) or [])}")
     return True
 
 
@@ -514,7 +513,6 @@ class Session:
 
         await self.send({"id": request_id, "result": True, "error": None})
         log(f"ACCEPT share worker={self.worker} share_diff≈{share_diff:.6g}{' BLOCK' if is_block else ''}", "ok")
-
         if is_block:
             await self.submit_block(j, header, extranonce2, hash_be)
 
@@ -536,7 +534,7 @@ class Session:
                 "height": j["height"],
                 "hash": hash_be.hex(),
                 "worker": self.worker,
-                "share_diff": max(stats["best_share_diff"], 0.0),
+                "share_diff": stats["best_share_diff"],
                 "reward": j["coinbasevalue"] / 100_000_000,
                 "time": time.time(),
                 "status": "accepted" if accepted else str(result),
