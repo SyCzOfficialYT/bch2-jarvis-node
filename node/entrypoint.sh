@@ -28,7 +28,7 @@ rpcbind=0.0.0.0
 rpcallowip=172.16.0.0/12
 
 # Pool/node performance
-\dbcache=1024
+dbcache=1024
 maxmempool=400
 mempoolexpiry=72
 
