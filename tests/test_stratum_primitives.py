@@ -1,5 +1,5 @@
-import importlib.util
 import hashlib
+import importlib.util
 import os
 import pathlib
 
@@ -54,3 +54,34 @@ def test_merkle_root_matches_full_tree_for_two_transactions():
     root = module.merkle_root(coinbase_hash, branch)
     expected = sha256d(sha256d(coinbase_hash + tx1) + sha256d(tx2 + tx2))
     assert root == expected
+
+
+def test_build_header_is_exactly_80_bytes():
+    job = {
+        "coinb1": "02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff",
+        "coinb2": "ffffffff01000000000000000000",
+        "merkle_branch": [],
+        "prevhash": "00" * 32,
+        "nbits": "1d00ffff",
+    }
+    header, hash_be, hash_int, share_diff = module.build_header(
+        job,
+        "20000000",
+        "5f5b2a00",
+        "01020304",
+        "aabbccdd",
+        "00000001",
+    )
+    assert len(header) == 80
+    assert len(hash_be) == 32
+    assert hash_int == int.from_bytes(hash_be, "big")
+    assert share_diff > 0
+
+
+def test_version_rolling_mask_accepts_only_masked_bits():
+    base = int("20000000", 16)
+    mask = module.DEFAULT_VERSION_MASK
+    allowed = base ^ (mask & 0x0000e000)
+    forbidden = base ^ 0x00000001
+    assert ((base ^ allowed) & ~mask) == 0
+    assert ((base ^ forbidden) & ~mask) != 0
