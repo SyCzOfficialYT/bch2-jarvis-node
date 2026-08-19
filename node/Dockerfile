@@ -62,7 +62,9 @@ RUN chmod +x /entrypoint.sh /init-wallet.sh
 VOLUME ["/data/.bitcoincashII", "/holding"]
 EXPOSE 8339 8342
 
-USER bch2
+# Keep the container entrypoint as root so it can repair ownership of
+# persistent Docker volumes. entrypoint.sh drops to the unprivileged bch2
+# user before launching bitcoincashIId.
 WORKDIR /data
 
 ENTRYPOINT ["/entrypoint.sh"]
