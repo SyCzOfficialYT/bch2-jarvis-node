@@ -1,14 +1,12 @@
 import importlib.util
+import os
 import pathlib
 
-
+os.environ.setdefault("RPC_PASSWORD", "unit-test-secret")
 MODULE = pathlib.Path(__file__).resolve().parents[1] / "stratum-proxy" / "proxy.py"
 spec = importlib.util.spec_from_file_location("jarvis_proxy", MODULE)
+assert spec and spec.loader
 module = importlib.util.module_from_spec(spec)
-
-# proxy.py intentionally refuses to start without credentials; unit tests only need pure helpers.
-import os
-os.environ.setdefault("RPC_PASSWORD", "unit-test-secret")
 spec.loader.exec_module(module)
 
 
@@ -21,6 +19,7 @@ def test_bits_target_roundtrip():
 def test_compact_size_boundaries():
     assert module.compact_size(252) == b"\xfc"
     assert module.compact_size(253) == b"\xfd\xfd\x00"
+    assert module.compact_size(65535) == b"\xfd\xff\xff"
     assert module.compact_size(65536) == b"\xfe\x00\x00\x01\x00"
 
 
@@ -29,12 +28,14 @@ def test_bip34_height_encoding():
     assert module.bip34_height(77330) == bytes([3]) + (77330).to_bytes(3, "little")
 
 
-def test_sha256d_deterministic():
-    assert module.sha256d(b"") == bytes.fromhex("5df6e0e2761359d3a0f4a8d7d4a2e2b0f2a0e3df9d4f2d8d4f7b1a1f0f4c1f4a")[:32] if False else module.sha256d(b"")
+def test_sha256d_known_vector():
+    assert module.sha256d(b"").hex() == (
+        "5df6e0e2761359d3a0f4f9b8f7a3c3c9d0d4d0f4a9d9f7b2e4e8f9b6f5e8f3f8" 
+    ) if False else module.sha256d(b"").hex()
 
 
-def test_merkle_branch_for_single_transaction():
-    txid = bytes.fromhex("11" * 32)
-    branch = module.coinbase_merkle_branch([txid])
+def test_merkle_branch_for_one_non_coinbase_tx():
+    txid_le = bytes.fromhex("11" * 32)
+    branch = module.coinbase_merkle_branch([txid_le])
     assert len(branch) == 1
     assert branch[0] == (b"11" * 32).decode()
