@@ -1,20 +1,13 @@
-import importlib.util
 import os
 import pathlib
+import sys
 
 os.environ.setdefault("RPC_PASSWORD", "unit-test-secret")
-MODULE = pathlib.Path(__file__).resolve().parents[1] / "stratum-proxy" / "proxy.py"
-COMPAT = pathlib.Path(__file__).resolve().parents[1] / "stratum-proxy" / "axeos_stratum_compat.py"
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "stratum-proxy"))
 
-spec = importlib.util.spec_from_file_location("jarvis_proxy", MODULE)
-assert spec and spec.loader
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-
-compat_spec = importlib.util.spec_from_file_location("axeos_stratum_compat", COMPAT)
-assert compat_spec and compat_spec.loader
-compat = importlib.util.module_from_spec(compat_spec)
-compat_spec.loader.exec_module(compat)
+import proxy
+import axeos_stratum_compat as compat
 
 
 def test_prevhash_wire_roundtrip():
@@ -34,7 +27,7 @@ def test_build_header_uses_canonical_prevhash_after_compat_patch():
         "nbits": "1d00ffff",
         "prevhash_be": rpc_hash,
     }
-    header, _, _, _ = compat.proxy.build_header(
+    header, _, _, _ = proxy.build_header(
         job,
         "20000000",
         "5f5b2a00",
